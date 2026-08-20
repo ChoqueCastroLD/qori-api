@@ -1,30 +1,11 @@
 import { Elysia, t } from "elysia";
 import { db } from "../db";
 import { applyLedger } from "../lib/wallet";
-import { createCommitment, hmacSha256Hex, sha256Hex } from "../fair";
-import { generateShow, type GameType } from "../show";
+import { createCommitment } from "../fair";
 import { withUser } from "./auth";
+import { executeDraw, refundRaffle } from "../lib/draw";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
-
-/** Fetch the latest drand round (public verifiable randomness beacon). */
-async function fetchDrandLatest(): Promise<{ round: number; randomness: string }> {
-  const res = await fetch("https://api.drand.sh/public/latest");
-  if (!res.ok) throw new Error("drand_unreachable");
-  const j = (await res.json()) as { round: number; randomness: string };
-  return { round: j.round, randomness: j.randomness };
-}
-
-/** Deterministic root binding the exact participant set into the entropy. */
-async function computeTicketsRoot(raffleId: string): Promise<string> {
-  const tickets = await db.ticket.findMany({
-    where: { raffleId },
-    orderBy: { number: "asc" },
-    select: { number: true, ownerId: true },
-  });
-  const canonical = tickets.map((t) => `${t.number}:${t.ownerId ?? ""}`).join("|");
-  return sha256Hex(canonical);
-}
 
 export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   .use(withUser)
@@ -97,7 +78,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     },
   )
 
-  // Run the draw: fetch drand, compute the show, persist winners, reveal seed.
+  // Run the draw now (manual). Uses the shared engine (drand + show + reveal).
   .post("/raffles/:id/draw", async ({ params, set }) => {
     const raffle = await db.raffle.findUnique({ where: { id: params.id } });
     if (!raffle) {
@@ -108,66 +89,17 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       set.status = 409;
       return { error: "already_drawn" };
     }
-    const tickets = await db.ticket.findMany({
-      where: { raffleId: raffle.id },
-      orderBy: { number: "asc" },
-    });
-    if (tickets.length < raffle.minTickets) {
+    const count = await db.ticket.count({ where: { raffleId: raffle.id } });
+    if (count < raffle.minTickets) {
       set.status = 422;
-      return { error: "below_min_tickets", ticketCount: tickets.length, minTickets: raffle.minTickets };
+      return { error: "below_min_tickets", ticketCount: count, minTickets: raffle.minTickets };
     }
-
-    const drand = await fetchDrandLatest();
-    const ticketsRoot = await computeTicketsRoot(raffle.id);
-    const publicEntropy = `${drand.round}:${drand.randomness}:${ticketsRoot}`;
-    const digest = await hmacSha256Hex(raffle.serverSeed!, publicEntropy);
-
-    const show = generateShow({
-      digest,
-      ticketCount: tickets.length,
-      winnersCount: raffle.winnersCount,
-      games: (raffle.games as GameType[]) ?? ["ELIMINATION"],
-      finale: (raffle.finale as GameType) ?? null,
-    });
-
-    // Map winner indices (canonical order) → ticket rows.
-    const winnerTickets = show.winners.map((idx) => tickets[idx]);
-
-    await db.$transaction(async (tx) => {
-      await tx.raffle.update({
-        where: { id: raffle.id },
-        data: {
-          status: "DRAWN",
-          drandRound: BigInt(drand.round),
-          drandValue: drand.randomness,
-          ticketsRoot,
-          drawDigest: digest,
-          drawnAt: new Date(),
-        },
-      });
-      for (let i = 0; i < winnerTickets.length; i++) {
-        const wt = winnerTickets[i];
-        await tx.winner.create({
-          data: { raffleId: raffle.id, ticketId: wt.id, userId: wt.ownerId, position: i + 1 },
-        });
-      }
-      await tx.drawShow.create({
-        data: {
-          raffleId: raffle.id,
-          stages: show as any,
-          startsAt: new Date(),
-          endsAt: new Date(),
-        },
-      });
-    });
-
-    return {
-      ok: true,
-      winners: winnerTickets.map((wt, i) => ({ position: i + 1, number: wt.number })),
-      publicEntropy,
-      digest,
-      drandRound: drand.round,
-    };
+    const result = await executeDraw(raffle.id);
+    if (!result) {
+      set.status = 409;
+      return { error: "already_claimed" };
+    }
+    return { ok: true, ...result };
   })
 
   // Cancel a raffle and refund all spent lingotes.
@@ -177,24 +109,8 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       set.status = 404;
       return { error: "not_found" };
     }
-    const orders = await db.order.findMany({
-      where: { raffleId: raffle.id, status: "CONFIRMED" },
-    });
-    await db.$transaction(async (tx) => {
-      for (const o of orders) {
-        await applyLedger(tx, {
-          userId: o.userId,
-          amount: o.costLingotes,
-          type: "REFUND",
-          refType: "order",
-          refId: o.id,
-          memo: `Reembolso: ${raffle.title} cancelado`,
-        });
-        await tx.order.update({ where: { id: o.id }, data: { status: "REFUNDED" } });
-      }
-      await tx.raffle.update({ where: { id: raffle.id }, data: { status: "CANCELLED" } });
-    });
-    return { ok: true, refundedOrders: orders.length };
+    const refundedOrders = await refundRaffle(raffle.id);
+    return { ok: true, refundedOrders };
   })
 
   // --- Top-ups moderation ---

@@ -7,6 +7,7 @@ import { auth } from "./routes/auth";
 import { me } from "./routes/me";
 import { admin } from "./routes/admin";
 import { chat } from "./routes/chat";
+import { startScheduler } from "./scheduler";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:4321";
@@ -182,5 +183,6 @@ const app = new Elysia({ prefix: "/api" })
   .listen(PORT);
 
 console.log(`🎟️  qori-api on http://localhost:${PORT}`);
+startScheduler();
 
 export type App = typeof app;
