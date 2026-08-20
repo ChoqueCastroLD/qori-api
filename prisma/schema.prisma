@@ -62,6 +62,7 @@ model User {
   wins           Winner[]
   referrals      User[]         @relation("Referrals")
   confirmedTopups TopUp[]       @relation("TopUpConfirmedBy")
+  chatMessages   ChatMessage[]
 
   @@index([referredById])
 }
@@ -228,6 +229,7 @@ model Raffle {
   orders   Order[]
   winners  Winner[]
   show     DrawShow?
+  chat     ChatMessage[]
 
   @@index([status])
 }
@@ -287,6 +289,21 @@ model Winner {
 
   @@unique([raffleId, position])
   @@index([raffleId])
+}
+
+// Live chat messages per raffle (shown during the show + verification).
+model ChatMessage {
+  id        String   @id @default(cuid())
+  raffle    Raffle   @relation(fields: [raffleId], references: [id], onDelete: Cascade)
+  raffleId  String
+  user      User?    @relation(fields: [userId], references: [id])
+  userId    String?
+  nickname  String
+  avatarUrl String?
+  text      String   @db.Text
+  createdAt DateTime @default(now())
+
+  @@index([raffleId, createdAt])
 }
 
 // Generated live show: deterministic stage sequence for sync + replay.

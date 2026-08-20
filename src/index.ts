@@ -6,6 +6,7 @@ import { db } from "./db";
 import { auth } from "./routes/auth";
 import { me } from "./routes/me";
 import { admin } from "./routes/admin";
+import { chat } from "./routes/chat";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:4321";
@@ -49,6 +50,7 @@ const app = new Elysia({ prefix: "/api" })
   .use(auth)
   .use(me)
   .use(admin)
+  .use(chat)
   .get("/health", () => ({ ok: true, service: "qori-api" }))
 
   // --- Public raffle browsing ---
@@ -157,8 +159,12 @@ const app = new Elysia({ prefix: "/api" })
         ok: commitmentOk,
         commitmentOk,
         digest,
-        winners: show.winners.map((i) => i + 1), // 1-based ticket numbers
-        stageCount: show.stages.length,
+        ticketCount: body.ticketCount,
+        winnersCount: body.winnersCount,
+        // Canonical 0-based indices; the client maps them to real ticket numbers
+        // via the participant list (numbers are random, not index+1).
+        winners: show.winners,
+        stages: show.stages,
       };
     },
     {

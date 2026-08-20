@@ -49,12 +49,22 @@ export async function seedData(db: PrismaClient) {
     });
   }
 
+  // Every raffle runs ALL five phases; the finale (flashiest) is forced last.
+  const ALL_GAMES: GameType[] = ["ELIMINATION", "DIGIT_REVEAL", "SQUID", "HORSE_RACE", "BOMBS"];
+  const CHAT_LINES = [
+    "¡Vamos que se puede! 🍀", "mi número es el ganador seguro 😎", "suerte a todos",
+    "qué nervios el show en vivo", "compré 5 boletos 🔥", "el revelado de dígitos es lo mejor",
+    "provably-fair, me encanta que sea verificable", "🤞🤞🤞", "las bombas al final 💣",
+    "gané el mes pasado, gracias qori", "vamoo", "esta moto es mía jaja",
+  ];
+
   async function makeRaffle(opts: {
     slug: string; title: string; description: string; imgSeed: string;
     prizeUsd: number; priceLingotes: number; total: number; min: number;
-    games: GameType[]; finale: GameType; winnersCount: number;
+    games?: GameType[]; finale: GameType; winnersCount: number;
     sell: number; closesInHours: number; draw?: boolean;
   }) {
+    const games = ALL_GAMES;
     const { serverSeed, commitment } = await createCommitment();
     const raffle = await db.raffle.create({
       data: {
@@ -62,12 +72,23 @@ export async function seedData(db: PrismaClient) {
         images: [IMG(opts.imgSeed), IMG(opts.imgSeed + "b")],
         prizeValue: opts.prizeUsd * 100, ticketPrice: opts.priceLingotes,
         totalTickets: opts.total, minTickets: opts.min, maxTicketsPerUser: 50,
-        winnersCount: opts.winnersCount, games: opts.games, finale: opts.finale,
+        winnersCount: opts.winnersCount, games, finale: opts.finale,
         entropySource: "drand (round a la hora del sorteo) + raíz de boletos",
         commitment, serverSeed, status: "OPEN", opensAt: new Date(),
         closesAt: new Date(Date.now() + opts.closesInHours * 3600 * 1000),
       },
     });
+
+    // Seed some demo chat messages.
+    for (let i = 0; i < 8; i++) {
+      const u = users[Math.floor(Math.random() * users.length)];
+      await db.chatMessage.create({
+        data: {
+          raffleId: raffle.id, userId: u.id, nickname: u.nickname, avatarUrl: u.avatarUrl,
+          text: CHAT_LINES[Math.floor(Math.random() * CHAT_LINES.length)],
+        },
+      });
+    }
     const taken = new Set<number>();
     for (let i = 0; i < opts.sell; i++) {
       let n = 0;
@@ -82,7 +103,7 @@ export async function seedData(db: PrismaClient) {
       const ticketsRoot = await sha256Hex(canonical);
       const publicEntropy = `1234567:${"a".repeat(64)}:${ticketsRoot}`;
       const digest = await hmacSha256Hex(serverSeed, publicEntropy);
-      const show = generateShow({ digest, ticketCount: tickets.length, winnersCount: opts.winnersCount, games: opts.games, finale: opts.finale });
+      const show = generateShow({ digest, ticketCount: tickets.length, winnersCount: opts.winnersCount, games, finale: opts.finale });
       const winnerTickets = show.winners.map((idx) => tickets[idx]);
       await db.raffle.update({
         where: { id: raffle.id },
