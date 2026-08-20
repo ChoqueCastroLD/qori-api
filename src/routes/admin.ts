@@ -3,6 +3,7 @@ import { db } from "../db";
 import { applyLedger } from "../lib/wallet";
 import { createCommitment, hmacSha256Hex, sha256Hex } from "../fair";
 import { generateShow, type GameType } from "../show";
+import { withUser } from "./auth";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
@@ -26,9 +27,12 @@ async function computeTicketsRoot(raffleId: string): Promise<string> {
 }
 
 export const admin = new Elysia({ name: "admin", prefix: "/admin" })
+  .use(withUser)
   .guard({
-    beforeHandle({ headers, set }) {
-      if (!ADMIN_TOKEN || headers["authorization"] !== `Bearer ${ADMIN_TOKEN}`) {
+    beforeHandle({ headers, set, user }: any) {
+      const byToken = ADMIN_TOKEN && headers["authorization"] === `Bearer ${ADMIN_TOKEN}`;
+      const bySession = user?.role === "ADMIN";
+      if (!byToken && !bySession) {
         set.status = 401;
         return { error: "unauthorized" };
       }

@@ -9,6 +9,7 @@
 import { PrismaClient } from "@prisma/client";
 import { createCommitment, hmacSha256Hex, sha256Hex } from "../src/fair";
 import { generateShow, type GameType } from "../src/show";
+import { hashPassword } from "../src/lib/auth";
 
 const db = new PrismaClient();
 
@@ -31,7 +32,7 @@ async function main() {
 
   // --- Users ---
   const names = ["Ana", "Beto", "Carla", "Diego", "Elena", "Fabio", "Gaby", "Hugo", "Ivan", "Julia", "Kevin", "Lucia"];
-  const users = [];
+  const users: any[] = [];
   for (let i = 0; i < names.length; i++) {
     const u = await db.user.create({
       data: {
@@ -53,6 +54,7 @@ async function main() {
       name: "Qori Admin",
       nickname: "qori",
       role: "ADMIN",
+      passwordHash: await hashPassword("qoriadmin123"),
       emailVerified: new Date(),
       referralCode: "QORIADMIN",
       balance: 0,
