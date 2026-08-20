@@ -41,15 +41,25 @@ function sessionCookieOpts(expiresAt: Date) {
 }
 
 /**
- * Auth plugin. Exposes `user` (current authenticated user or null) to any route
- * that uses this plugin, plus the auth endpoints.
+ * Session plugin: resolves `user` (or null) from the session cookie and exposes
+ * it globally. Named + deduped by Elysia, so `auth`, `me` and any other plugin
+ * can `.use(withUser)` and share a single per-request resolution.
  */
-export const auth = new Elysia({ name: "auth" })
-  .derive({ as: "global" }, async ({ cookie }) => {
+export const withUser = new Elysia({ name: "with-user" }).derive(
+  { as: "global" },
+  async ({ cookie }) => {
     const token = cookie[SESSION_COOKIE]?.value as string | undefined;
     const user = await userFromToken(token);
     return { user };
-  })
+  },
+);
+
+/**
+ * Auth plugin. Exposes `user` to any route via `withUser`, plus the auth
+ * endpoints (register/login/logout/me/google).
+ */
+export const auth = new Elysia({ name: "auth" })
+  .use(withUser)
 
   // --- Register with email + password ---
   .post(

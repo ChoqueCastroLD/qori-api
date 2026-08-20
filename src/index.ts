@@ -1,10 +1,12 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
-import { computeWinner, createCommitment, verifyDraw } from "./fair";
+import { hmacSha256Hex, sha256Hex, verifyDraw } from "./fair";
+import { generateShow, type GameType } from "./show";
 import { db } from "./db";
 import { auth } from "./routes/auth";
+import { me } from "./routes/me";
+import { admin } from "./routes/admin";
 
-const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 const PORT = Number(process.env.PORT ?? 3000);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:4321";
 
@@ -42,20 +44,32 @@ function publicRaffle(r: any) {
   };
 }
 
-// All backend routes live under /api (Coolify routes qori.cc/api → this app).
 const app = new Elysia({ prefix: "/api" })
   .use(cors({ origin: WEB_ORIGIN, credentials: true }))
   .use(auth)
+  .use(me)
+  .use(admin)
   .get("/health", () => ({ ok: true, service: "qori-api" }))
 
   // --- Public raffle browsing ---
   .get("/raffles", async () => {
     const raffles = await db.raffle.findMany({
       where: { status: { in: ["OPEN", "CLOSED", "DRAWING", "DRAWN"] } },
-      orderBy: { createdAt: "desc" },
-      include: { _count: { select: { tickets: true } } },
+      orderBy: [{ status: "asc" }, { closesAt: "asc" }, { createdAt: "desc" }],
+      include: {
+        _count: { select: { tickets: true } },
+        winners: { include: { ticket: true, user: true }, orderBy: { position: "asc" } },
+      },
     });
-    return raffles.map(publicRaffle);
+    return raffles.map((r) => ({
+      ...publicRaffle(r),
+      winners: r.winners.map((w) => ({
+        position: w.position,
+        ticketNumber: w.ticket.number,
+        nickname: w.user?.nickname ?? null,
+        avatarUrl: w.user?.avatarUrl ?? null,
+      })),
+    }));
   })
 
   .get("/raffles/:slug", async ({ params, set }) => {
@@ -81,10 +95,40 @@ const app = new Elysia({ prefix: "/api" })
     };
   })
 
-  // --- Public provably-fair verification ---
+  // The generated live show + canonical participants (for animation + replay).
+  .get("/raffles/:slug/show", async ({ params, set }) => {
+    const raffle = await db.raffle.findUnique({
+      where: { slug: params.slug },
+      include: { show: true },
+    });
+    if (!raffle || !raffle.show) {
+      set.status = 404;
+      return { error: "no_show" };
+    }
+    const tickets = await db.ticket.findMany({
+      where: { raffleId: raffle.id },
+      orderBy: { number: "asc" },
+      include: { owner: { select: { nickname: true, avatarUrl: true } } },
+    });
+    const participants = tickets.map((t) => ({
+      number: t.number,
+      comment: t.comment,
+      nickname: t.owner?.nickname ?? null,
+      avatarUrl: t.owner?.avatarUrl ?? null,
+    }));
+    return {
+      raffle: { slug: raffle.slug, title: raffle.title, winnersCount: raffle.winnersCount },
+      show: raffle.show.stages,
+      participants,
+      startsAt: raffle.show.startsAt,
+      fairness: publicRaffle({ ...raffle, _count: { tickets: tickets.length } }).fairness,
+    };
+  })
+
+  // --- Provably-fair verification (winner only) ---
   .post(
     "/verify",
-    async ({ body }) => verifyDraw(body),
+    ({ body }) => verifyDraw(body),
     {
       body: t.Object({
         serverSeed: t.String(),
@@ -96,120 +140,38 @@ const app = new Elysia({ prefix: "/api" })
     },
   )
 
-  // --- Admin (bearer token; real admin UI comes later) ---
-  .guard(
-    {
-      beforeHandle({ headers, set }) {
-        if (!ADMIN_TOKEN || headers["authorization"] !== `Bearer ${ADMIN_TOKEN}`) {
-          set.status = 401;
-          return { error: "unauthorized" };
-        }
-      },
+  // --- Full-show verification: recompute winners + stages from public values ---
+  .post(
+    "/verify-show",
+    async ({ body }) => {
+      const commitmentOk = (await sha256Hex(body.serverSeed)) === body.commitment;
+      const digest = await hmacSha256Hex(body.serverSeed, body.publicEntropy);
+      const show = generateShow({
+        digest,
+        ticketCount: body.ticketCount,
+        winnersCount: body.winnersCount,
+        games: body.games as GameType[],
+        finale: (body.finale as GameType) ?? null,
+      });
+      return {
+        ok: commitmentOk,
+        commitmentOk,
+        digest,
+        winners: show.winners.map((i) => i + 1), // 1-based ticket numbers
+        stageCount: show.stages.length,
+      };
     },
-    (admin) =>
-      admin
-        .post(
-          "/admin/raffles",
-          async ({ body }) => {
-            const { serverSeed, commitment } = await createCommitment();
-            const raffle = await db.raffle.create({
-              data: {
-                slug: body.slug,
-                title: body.title,
-                description: body.description,
-                images: body.images ?? [],
-                prizeValue: body.prizeValue,
-                ticketPrice: body.ticketPrice,
-                totalTickets: body.totalTickets,
-                minTickets: body.minTickets ?? 1,
-                maxTicketsPerUser: body.maxTicketsPerUser ?? null,
-                winnersCount: body.winnersCount ?? 1,
-                games: (body.games ?? []) as any,
-                finale: (body.finale ?? null) as any,
-                entropySource: body.entropySource ?? "drand round at draw time",
-                commitment,
-                serverSeed,
-                status: "OPEN",
-                opensAt: new Date(),
-                closesAt: body.closesAt ? new Date(body.closesAt) : null,
-              },
-            });
-            return { id: raffle.id, slug: raffle.slug, commitment };
-          },
-          {
-            body: t.Object({
-              slug: t.String(),
-              title: t.String(),
-              description: t.String(),
-              images: t.Optional(t.Array(t.String())),
-              prizeValue: t.Integer(),
-              ticketPrice: t.Integer({ minimum: 0 }),
-              totalTickets: t.Integer({ minimum: 1 }),
-              minTickets: t.Optional(t.Integer({ minimum: 1 })),
-              maxTicketsPerUser: t.Optional(t.Integer({ minimum: 1 })),
-              winnersCount: t.Optional(t.Integer({ minimum: 1 })),
-              games: t.Optional(t.Array(t.String())),
-              finale: t.Optional(t.String()),
-              entropySource: t.Optional(t.String()),
-              closesAt: t.Optional(t.String()),
-            }),
-          },
-        )
-
-        // Minimal draw (winner computation). Full gamified show comes in M4.
-        .post(
-          "/admin/raffles/:id/draw",
-          async ({ params, body, set }) => {
-            const raffle = await db.raffle.findUnique({ where: { id: params.id } });
-            if (!raffle) {
-              set.status = 404;
-              return { error: "not_found" };
-            }
-            if (raffle.status === "DRAWN") {
-              set.status = 409;
-              return { error: "already_drawn" };
-            }
-            const ticketCount = await db.ticket.count({ where: { raffleId: raffle.id } });
-            if (ticketCount < raffle.minTickets) {
-              set.status = 422;
-              return { error: "below_min_tickets", ticketCount, minTickets: raffle.minTickets };
-            }
-
-            const { winnerIndex, winnerNumber, digest } = await computeWinner({
-              serverSeed: raffle.serverSeed!,
-              publicEntropy: body.publicEntropy,
-              ticketCount,
-            });
-            const winnerTicket = await db.ticket.findFirst({
-              where: { raffleId: raffle.id },
-              orderBy: { number: "asc" },
-              skip: winnerIndex,
-            });
-
-            await db.$transaction([
-              db.raffle.update({
-                where: { id: raffle.id },
-                data: {
-                  status: "DRAWN",
-                  drandValue: body.publicEntropy,
-                  drawDigest: digest,
-                  drawnAt: new Date(),
-                },
-              }),
-              db.winner.create({
-                data: {
-                  raffleId: raffle.id,
-                  ticketId: winnerTicket!.id,
-                  userId: winnerTicket!.ownerId,
-                  position: 1,
-                },
-              }),
-            ]);
-
-            return { winnerNumber, winnerTicketId: winnerTicket!.id, digest };
-          },
-          { body: t.Object({ publicEntropy: t.String() }) },
-        ),
+    {
+      body: t.Object({
+        serverSeed: t.String(),
+        commitment: t.String(),
+        publicEntropy: t.String(),
+        ticketCount: t.Integer({ minimum: 1 }),
+        winnersCount: t.Integer({ minimum: 1 }),
+        games: t.Array(t.String()),
+        finale: t.Optional(t.String()),
+      }),
+    },
   )
   .listen(PORT);
 
