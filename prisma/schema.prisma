@@ -1,0 +1,305 @@
+// qori.cc — raffle engine schema.
+//
+// Design priorities:
+//  - Auditability: every draw is reproducible (provably-fair) and every lingote
+//    movement is an append-only ledger entry.
+//  - Closed-loop currency: lingotes are spent, never withdrawn. 1 USD = 10 lingotes.
+//  - Money from real payments is stored in integer minor units (USD cents).
+//    Lingotes are whole integers.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// ---------------------------------------------------------------------------
+// Identity & auth
+// ---------------------------------------------------------------------------
+
+enum Role {
+  USER
+  ADMIN
+}
+
+model User {
+  id            String    @id @default(cuid())
+  email         String    @unique
+  emailVerified DateTime?
+  // Null for social-only accounts that never set a password.
+  passwordHash  String?
+  name          String?
+  // Public display identity (privacy: real photo is never forced).
+  nickname      String?
+  avatarUrl     String?
+  phone         String?
+  country       String? // ISO-3166 alpha-2, for geo-eligibility + T&C version
+  role          Role      @default(USER)
+
+  // Cached lingote balance. ALWAYS mutated inside a tx that also appends a
+  // LedgerEntry — the ledger is the source of truth; this is a fast read.
+  balance Int @default(0)
+
+  // Referral graph.
+  referralCode     String  @unique
+  referredBy       User?   @relation("Referrals", fields: [referredById], references: [id])
+  referredById     String?
+  // True once the +10 lingote first-purchase reward has been paid to referrer.
+  referralRewarded Boolean @default(false)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  sessions       Session[]
+  oauthAccounts  OAuthAccount[]
+  ledger         LedgerEntry[]
+  topups         TopUp[]
+  orders         Order[]
+  tickets        Ticket[]
+  wins           Winner[]
+  referrals      User[]         @relation("Referrals")
+  confirmedTopups TopUp[]       @relation("TopUpConfirmedBy")
+
+  @@index([referredById])
+}
+
+model OAuthAccount {
+  id                String @id @default(cuid())
+  provider          String // e.g. "google"
+  providerAccountId String
+  user              User   @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId            String
+
+  createdAt DateTime @default(now())
+
+  @@unique([provider, providerAccountId])
+  @@index([userId])
+}
+
+model Session {
+  id        String   @id @default(cuid())
+  // sha256 of the opaque session token; the raw token lives only in the cookie.
+  tokenHash String   @unique
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  expiresAt DateTime
+  userAgent String?
+  ip        String?
+  createdAt DateTime @default(now())
+
+  @@index([userId])
+}
+
+// ---------------------------------------------------------------------------
+// Wallet (closed-loop lingotes)
+// ---------------------------------------------------------------------------
+
+enum LedgerType {
+  TOPUP // bought lingotes with real money
+  TICKET_BONUS // +1 per ticket
+  REFERRAL // +10 first purchase of a referred user
+  TICKET_SPEND // spent on tickets
+  REFUND // raffle cancelled / below min
+  ADJUSTMENT // manual admin correction
+}
+
+// Append-only. Never UPDATE or DELETE a row here.
+model LedgerEntry {
+  id           String     @id @default(cuid())
+  user         User       @relation(fields: [userId], references: [id])
+  userId       String
+  amount       Int // + credit, - debit (lingotes)
+  balanceAfter Int // user balance immediately after this entry
+  type         LedgerType
+  // Soft link to the thing that caused it (order id, topup id, raffle id…).
+  refType      String?
+  refId        String?
+  memo         String?
+  createdAt    DateTime   @default(now())
+
+  @@index([userId, createdAt])
+}
+
+// ---------------------------------------------------------------------------
+// Payments (real money → lingotes)
+// ---------------------------------------------------------------------------
+
+enum TopUpMethod {
+  PAYPAL
+  YAPE
+  PLIN
+  TRANSFER
+  MERCADOPAGO
+  CRYPTO
+}
+
+enum TopUpStatus {
+  PENDING
+  PAID
+  FAILED
+  REFUNDED
+}
+
+model TopUp {
+  id        String      @id @default(cuid())
+  user      User        @relation(fields: [userId], references: [id])
+  userId    String
+  amountUsd Int // USD cents charged
+  lingotes  Int // lingotes credited (amountUsd/100 * 10)
+  method    TopUpMethod
+  status    TopUpStatus @default(PENDING)
+
+  // Automated providers: external reference. Manual methods: uploaded proof.
+  providerRef String?
+  proofUrl    String?
+
+  confirmedAt   DateTime?
+  confirmedBy   User?     @relation("TopUpConfirmedBy", fields: [confirmedById], references: [id])
+  confirmedById String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([userId, status])
+  @@index([status])
+}
+
+// ---------------------------------------------------------------------------
+// Raffles, tickets, orders, draw
+// ---------------------------------------------------------------------------
+
+enum RaffleStatus {
+  DRAFT // being prepared, not public
+  OPEN // selling tickets
+  CLOSED // sales ended, awaiting draw
+  DRAWING // live show running
+  DRAWN // finished, winners set, seed revealed
+  CANCELLED // called off; lingotes refunded
+}
+
+enum GameType {
+  ELIMINATION // tickets eliminated in order until winners remain
+  DIGIT_REVEAL // winning number's digits revealed one by one
+  BOMBS // tickets blown up in phases
+  SQUID // red-light / green-light
+  HORSE_RACE // tickets advance steps to the finish
+}
+
+model Raffle {
+  id          String       @id @default(cuid())
+  slug        String       @unique
+  title       String
+  description String       @db.Text
+  images      String[]
+  prizeValue  Int // USD cents, for display/transparency
+  ticketPrice Int // lingotes per ticket (0 = free)
+  totalTickets     Int // cupo total
+  minTickets       Int @default(1) // below this at draw time → refund/cancel
+  maxTicketsPerUser Int? // anti-hoarding; null = unlimited
+  winnersCount     Int @default(1)
+  status      RaffleStatus @default(DRAFT)
+
+  // Which games run in the show. Order is randomized deterministically at draw
+  // time; the flashiest game (finale) is placed last.
+  games  GameType[]
+  finale GameType?
+
+  // --- Provably-fair audit trail (see docs/FAIRNESS.md) ---
+  commitment    String // sha256(serverSeed), published at OPEN
+  entropySource String // human description, e.g. "drand round at draw time"
+  serverSeed    String? // revealed only after the show ends
+  drandRound    BigInt? // fixed at CLOSE
+  drandValue    String? // appears exactly at draw time
+  ticketsRoot   String? // merkle root of tickets at CLOSE
+  drawDigest    String? // HMAC(serverSeed, publicEntropy)
+
+  opensAt        DateTime?
+  closesAt       DateTime? // scheduled draw time
+  drawnAt        DateTime?
+  extensionCount Int       @default(0) // +24h auto-extensions applied
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  tickets  Ticket[]
+  orders   Order[]
+  winners  Winner[]
+  show     DrawShow?
+
+  @@index([status])
+}
+
+enum OrderStatus {
+  CONFIRMED // lingotes deducted, tickets issued
+  REFUNDED
+}
+
+model Order {
+  id            String      @id @default(cuid())
+  raffle        Raffle      @relation(fields: [raffleId], references: [id])
+  raffleId      String
+  user          User        @relation(fields: [userId], references: [id])
+  userId        String
+  quantity      Int
+  costLingotes  Int // total lingotes spent
+  bonusLingotes Int @default(0) // +1 per ticket credited back
+  status        OrderStatus @default(CONFIRMED)
+  createdAt     DateTime    @default(now())
+
+  tickets Ticket[]
+
+  @@index([raffleId])
+  @@index([userId])
+}
+
+model Ticket {
+  id       String  @id @default(cuid())
+  raffle   Raffle  @relation(fields: [raffleId], references: [id])
+  raffleId String
+  // 1-based, unique within a raffle; also the canonical draw ordering.
+  number   Int
+  order    Order?  @relation(fields: [orderId], references: [id])
+  orderId  String?
+  owner    User?   @relation(fields: [ownerId], references: [id])
+  ownerId  String?
+  comment  String? // buyer's public note shown on the ticket "character"
+  createdAt DateTime @default(now())
+
+  win Winner?
+
+  @@unique([raffleId, number])
+  @@index([ownerId])
+}
+
+model Winner {
+  id       String @id @default(cuid())
+  raffle   Raffle @relation(fields: [raffleId], references: [id])
+  raffleId String
+  ticket   Ticket @relation(fields: [ticketId], references: [id])
+  ticketId String @unique
+  user     User?  @relation(fields: [userId], references: [id])
+  userId   String?
+  position Int    @default(1) // 1 = first winner, for multi-winner raffles
+  createdAt DateTime @default(now())
+
+  @@unique([raffleId, position])
+  @@index([raffleId])
+}
+
+// Generated live show: deterministic stage sequence for sync + replay.
+model DrawShow {
+  id       String @id @default(cuid())
+  raffle   Raffle @relation(fields: [raffleId], references: [id], onDelete: Cascade)
+  raffleId String @unique
+
+  // Full ordered stage data derived from (serverSeed, publicEntropy).
+  // Streamed over WebSocket on a timeline; also lets anyone replay/verify.
+  stages   Json
+  startsAt DateTime // when the synchronized show begins
+  endsAt   DateTime?
+
+  createdAt DateTime @default(now())
+}
