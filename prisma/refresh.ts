@@ -1,5 +1,5 @@
 // Non-destructive refresh: set all raffles to the 5 phases, regenerate the show
-// for drawn raffles (winners are unchanged — they're picked before games in the
+// for drawn raffles (winners are unchanged - they're picked before games in the
 // RNG stream), and add demo chat messages where missing. No deletes.
 import { PrismaClient } from "@prisma/client";
 import { hmacSha256Hex } from "../src/fair";

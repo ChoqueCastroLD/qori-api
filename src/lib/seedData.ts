@@ -1,5 +1,5 @@
 /**
- * Additive seeder — inserts demo data. Contains NO deletes.
+ * Additive seeder - inserts demo data. Contains NO deletes.
  * Guarded: if raffles already exist it does nothing (idempotent, safe on prod).
  */
 import { PrismaClient } from "@prisma/client";
