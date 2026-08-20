@@ -140,13 +140,9 @@ export const auth = new Elysia({ name: "auth" })
     return { ok: true };
   })
 
-  // --- Current user ---
-  .get("/auth/me", ({ user, set }) => {
-    if (!user) {
-      set.status = 401;
-      return { error: "unauthenticated" };
-    }
-    return { user: publicUser(user) };
+  // --- Current user --- (200 with user:null for anonymous, to avoid console noise)
+  .get("/auth/me", ({ user }) => {
+    return { user: user ? publicUser(user) : null };
   })
 
   // --- Google OAuth: start ---
@@ -154,8 +150,10 @@ export const auth = new Elysia({ name: "auth" })
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const redirectUri = process.env.GOOGLE_REDIRECT_URI;
     if (!clientId || !redirectUri) {
-      set.status = 501;
-      return { error: "google_oauth_not_configured" };
+      // Not configured yet — bounce back to the login page with a friendly note
+      // instead of showing raw JSON.
+      set.redirect = `${WEB_ORIGIN}/entrar?oauth=unavailable`;
+      return;
     }
     const state = crypto.randomUUID();
     cookie["qori_oauth_state"].set({

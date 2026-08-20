@@ -44,7 +44,8 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       orderBy: { createdAt: "desc" },
       include: { _count: { select: { tickets: true, orders: true } } },
     });
-    return raffles;
+    // drandRound is BigInt — not JSON-serializable; expose as string.
+    return raffles.map((r) => ({ ...r, drandRound: r.drandRound != null ? r.drandRound.toString() : null }));
   })
 
   // Create a raffle (auto-commitment, opens immediately).
