@@ -4,14 +4,18 @@ import {
   createSession,
   destroySession,
   hashPassword,
+  sha256Hex,
   SESSION_COOKIE,
   uniqueReferralCode,
   userFromToken,
   verifyPassword,
 } from "../lib/auth";
 import type { User } from "@prisma/client";
-import { sendEmail, verificationEmail } from "../lib/email";
+import { sendEmail, verificationEmail, verificationCodeEmail } from "../lib/email";
 import { makeEmailToken, verifyEmailToken } from "../lib/emailToken";
+import { isAllowedEmailDomain } from "../lib/emailDomains";
+
+const codeHashFor = (code: string, email: string) => sha256Hex(`${code}:${email}`);
 
 /** Fire-and-forget verification email. */
 async function sendVerification(user: { id: string; email: string }) {
@@ -71,15 +75,71 @@ export const withUser = new Elysia({ name: "with-user" }).derive(
 export const auth = new Elysia({ name: "auth" })
   .use(withUser)
 
-  // --- Register with email + password ---
+  // --- Step 1: request a verification code (pre-registration, no account yet) ---
   .post(
-    "/auth/register",
-    async ({ body, cookie, set, request }) => {
+    "/auth/request-code",
+    async ({ body, set }) => {
       const email = body.email.trim().toLowerCase();
+      if (!isAllowedEmailDomain(email)) {
+        set.status = 422;
+        return { error: "email_domain_not_allowed" };
+      }
       const existing = await db.user.findUnique({ where: { email } });
       if (existing) {
         set.status = 409;
         return { error: "email_taken" };
+      }
+      // Cooldown: avoid spamming codes (30s between sends per email).
+      const prev = await db.emailVerification.findUnique({ where: { email } });
+      if (prev && Date.now() - prev.updatedAt.getTime() < 30_000) {
+        set.status = 429;
+        return { error: "too_soon" };
+      }
+      const code = String(Math.floor(100000 + Math.random() * 900000));
+      const codeHash = await codeHashFor(code, email);
+      const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
+      await db.emailVerification.upsert({
+        where: { email },
+        update: { codeHash, expiresAt, attempts: 0 },
+        create: { email, codeHash, expiresAt },
+      });
+      const { subject, html } = verificationCodeEmail(code);
+      const sent = await sendEmail({ to: email, subject, html });
+      return { ok: true, sent };
+    },
+    { body: t.Object({ email: t.String({ format: "email" }) }) },
+  )
+
+  // --- Step 2: register (requires a valid code → account is verified on creation) ---
+  .post(
+    "/auth/register",
+    async ({ body, cookie, set, request }) => {
+      const email = body.email.trim().toLowerCase();
+      if (!isAllowedEmailDomain(email)) {
+        set.status = 422;
+        return { error: "email_domain_not_allowed" };
+      }
+      const existing = await db.user.findUnique({ where: { email } });
+      if (existing) {
+        set.status = 409;
+        return { error: "email_taken" };
+      }
+
+      // Verify the emailed code (pre-registration gate).
+      const rec = await db.emailVerification.findUnique({ where: { email } });
+      if (!rec || rec.expiresAt < new Date()) {
+        set.status = 422;
+        return { error: "code_expired" };
+      }
+      if (rec.attempts >= 5) {
+        set.status = 429;
+        return { error: "too_many_attempts" };
+      }
+      const codeOk = (await codeHashFor(body.code, email)) === rec.codeHash;
+      if (!codeOk) {
+        await db.emailVerification.update({ where: { email }, data: { attempts: { increment: 1 } } });
+        set.status = 422;
+        return { error: "invalid_code" };
       }
 
       // Resolve referrer from an optional referral code.
@@ -92,6 +152,7 @@ export const auth = new Elysia({ name: "auth" })
       const user = await db.user.create({
         data: {
           email,
+          emailVerified: new Date(), // verified via the emailed code
           passwordHash: await hashPassword(body.password),
           name: body.name,
           nickname: body.nickname ?? body.name ?? null,
@@ -100,18 +161,18 @@ export const auth = new Elysia({ name: "auth" })
           referredById,
         },
       });
+      await db.emailVerification.delete({ where: { email } }).catch(() => {});
 
       const { token, expiresAt } = await createSession(user.id, {
         userAgent: request.headers.get("user-agent") ?? undefined,
       });
       cookie[SESSION_COOKIE].set({ value: token, ...sessionCookieOpts(expiresAt) });
-      // Send the verification email (non-blocking).
-      void sendVerification(user).catch((e) => console.error("verification email failed", e));
       return { user: publicUser(user) };
     },
     {
       body: t.Object({
         email: t.String({ format: "email" }),
+        code: t.String({ minLength: 6, maxLength: 6 }),
         password: t.String({ minLength: 8, maxLength: 200 }),
         name: t.Optional(t.String({ maxLength: 100 })),
         nickname: t.Optional(t.String({ maxLength: 40 })),

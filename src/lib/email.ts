@@ -72,6 +72,20 @@ export function verificationEmail(link: string): { subject: string; html: string
   };
 }
 
+export function verificationCodeEmail(code: string): { subject: string; html: string } {
+  const boxed = `<div style="margin:20px 0;text-align:center">
+    <span style="display:inline-block;font-size:34px;font-weight:800;letter-spacing:10px;color:#0f172a;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:14px;padding:14px 22px">${code}</span>
+  </div>`;
+  return {
+    subject: `${code} es tu código de verificación · qori`,
+    html: template({
+      heading: "Tu código de verificación",
+      body: `Ingresa este código para crear tu cuenta en qori. Vence en 15 minutos.${boxed}`,
+      footnote: "Si no estás creando una cuenta, ignora este mensaje.",
+    }),
+  };
+}
+
 export function topupApprovedEmail(lingotes: number, amountUsd: number): { subject: string; html: string } {
   return {
     subject: "Recarga confirmada",

@@ -291,6 +291,17 @@ model Winner {
   @@index([raffleId])
 }
 
+// Pre-registration email verification codes (OTP). No account exists yet.
+model EmailVerification {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  codeHash  String
+  expiresAt DateTime
+  attempts  Int      @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
 // Live chat messages per raffle (shown during the show + verification).
 model ChatMessage {
   id        String   @id @default(cuid())
