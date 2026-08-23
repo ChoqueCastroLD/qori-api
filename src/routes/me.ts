@@ -3,6 +3,7 @@ import { db } from "../db";
 import { applyLedger, InsufficientFundsError } from "../lib/wallet";
 import { publicUser, withUser } from "./auth";
 import type { User } from "@prisma/client";
+import { createPreference, mpConfigured } from "../lib/mercadopago";
 
 /** 1 USD = 10 lingotes (fixed). */
 const LINGOTES_PER_USD = 10;
@@ -240,6 +241,22 @@ export const me = new Elysia({ name: "me" })
           status: "PENDING",
         },
       });
+      // Automated methods return a hosted checkout URL.
+      if (body.method === "MERCADOPAGO") {
+        if (!mpConfigured()) {
+          set.status = 503;
+          return { error: "mp_not_configured", topup };
+        }
+        try {
+          const pref = await createPreference({ topupId: topup.id, amountUsd: topup.amountUsd, lingotes });
+          await db.topUp.update({ where: { id: topup.id }, data: { providerRef: pref.id } });
+          return { topup, checkoutUrl: pref.url };
+        } catch (e) {
+          console.error("mp preference error", e);
+          set.status = 502;
+          return { error: "mp_error", topup };
+        }
+      }
       return { topup };
     },
     {

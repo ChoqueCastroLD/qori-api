@@ -7,6 +7,7 @@ import { auth } from "./routes/auth";
 import { me } from "./routes/me";
 import { admin } from "./routes/admin";
 import { chat } from "./routes/chat";
+import { mp } from "./routes/mp";
 import { startScheduler } from "./scheduler";
 
 const PORT = Number(process.env.PORT ?? 3000);
@@ -52,6 +53,7 @@ const app = new Elysia({ prefix: "/api" })
   .use(me)
   .use(admin)
   .use(chat)
+  .use(mp)
   .get("/health", () => ({ ok: true, service: "qori-api" }))
 
   // --- Public raffle browsing ---
