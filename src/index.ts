@@ -10,6 +10,7 @@ import { chat } from "./routes/chat";
 import { mp } from "./routes/mp";
 import { paypal } from "./routes/paypal";
 import { startScheduler } from "./scheduler";
+import { getRates } from "./lib/fx";
 
 const PORT = Number(process.env.PORT ?? 3000);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:4321";
@@ -57,6 +58,9 @@ const app = new Elysia({ prefix: "/api" })
   .use(mp)
   .use(paypal)
   .get("/health", () => ({ ok: true, service: "qori-api" }))
+
+  // Live USD exchange rates (indicative display only).
+  .get("/fx", () => getRates())
 
   // --- Public raffle browsing ---
   .get("/raffles", async () => {

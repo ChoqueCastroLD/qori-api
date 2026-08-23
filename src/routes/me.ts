@@ -9,6 +9,11 @@ import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypa
 /** 1 USD = 10 lingotes (fixed). */
 const LINGOTES_PER_USD = 10;
 
+// Fixed recharge packages (USD cents → bonus lingotes). Bonuses are a
+// limited-time promo enforced server-side (never trust the client).
+const PKG_BONUS: Record<number, number> = { 500: 0, 1000: 10, 2000: 20, 5000: 30, 10000: 100, 50000: 500 };
+const BONUS_DEADLINE = Date.parse("2026-09-16T04:59:59Z"); // hasta 15-set-2026 (hora Perú)
+
 function requireUser(user: User | null, set: any): user is User {
   if (!user) {
     set.status = 401;
@@ -232,7 +237,14 @@ export const me = new Elysia({ name: "me" })
     "/topups",
     async ({ user, body, set }) => {
       if (!requireUser(user, set)) return { error: "unauthenticated" };
-      const lingotes = Math.round((body.amountUsd / 100) * LINGOTES_PER_USD);
+      // Only allow the fixed packages.
+      const bonus = PKG_BONUS[body.amountUsd];
+      if (bonus === undefined) {
+        set.status = 422;
+        return { error: "invalid_package" };
+      }
+      const base = Math.round((body.amountUsd / 100) * LINGOTES_PER_USD);
+      const lingotes = base + (Date.now() < BONUS_DEADLINE ? bonus : 0);
       const topup = await db.topUp.create({
         data: {
           userId: user.id,
@@ -278,14 +290,7 @@ export const me = new Elysia({ name: "me" })
     {
       body: t.Object({
         amountUsd: t.Integer({ minimum: 100 }), // min $1
-        method: t.Union([
-          t.Literal("PAYPAL"),
-          t.Literal("YAPE"),
-          t.Literal("PLIN"),
-          t.Literal("TRANSFER"),
-          t.Literal("MERCADOPAGO"),
-          t.Literal("CRYPTO"),
-        ]),
+        method: t.Union([t.Literal("MERCADOPAGO"), t.Literal("PAYPAL")]),
       }),
     },
   )
