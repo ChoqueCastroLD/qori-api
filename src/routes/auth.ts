@@ -125,11 +125,11 @@ export const auth = new Elysia({ name: "auth" })
   .get("/auth/verify-email", async ({ query, set }) => {
     const userId = query.token ? await verifyEmailToken(query.token) : null;
     if (!userId) {
-      set.redirect = `${WEB_ORIGIN}/correo-verificado?ok=0`;
+      set.status = 302; set.headers.location = `${WEB_ORIGIN}/correo-verificado?ok=0`;
       return;
     }
     await db.user.update({ where: { id: userId }, data: { emailVerified: new Date() } }).catch(() => {});
-    set.redirect = `${WEB_ORIGIN}/correo-verificado?ok=1`;
+    set.status = 302; set.headers.location = `${WEB_ORIGIN}/correo-verificado?ok=1`;
   }, { query: t.Object({ token: t.Optional(t.String()) }) })
 
   // --- Resend verification email ---
@@ -183,7 +183,7 @@ export const auth = new Elysia({ name: "auth" })
     if (!clientId || !redirectUri) {
       // Not configured yet — bounce back to the login page with a friendly note
       // instead of showing raw JSON.
-      set.redirect = `${WEB_ORIGIN}/entrar?oauth=unavailable`;
+      set.status = 302; set.headers.location = `${WEB_ORIGIN}/entrar?oauth=unavailable`;
       return;
     }
     const state = crypto.randomUUID();
@@ -201,7 +201,7 @@ export const auth = new Elysia({ name: "auth" })
     url.searchParams.set("response_type", "code");
     url.searchParams.set("scope", "openid email profile");
     url.searchParams.set("state", state);
-    set.redirect = url.toString();
+    set.status = 302; set.headers.location = url.toString();
   })
 
   // --- Google OAuth: callback ---
@@ -287,7 +287,7 @@ export const auth = new Elysia({ name: "auth" })
       cookie[SESSION_COOKIE].set({ value: token, ...sessionCookieOpts(expiresAt) });
       cookie["qori_oauth_state"].remove();
       // Back to the web app, now logged in.
-      set.redirect = WEB_ORIGIN;
+      set.status = 302; set.headers.location = WEB_ORIGIN;
     },
     { query: t.Object({ code: t.Optional(t.String()), state: t.Optional(t.String()) }) },
   );
