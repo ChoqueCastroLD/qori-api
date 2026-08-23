@@ -4,6 +4,7 @@ import { applyLedger } from "../lib/wallet";
 import { createCommitment } from "../fair";
 import { withUser } from "./auth";
 import { executeDraw, refundRaffle } from "../lib/draw";
+import { sendEmail, topupApprovedEmail } from "../lib/email";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
@@ -148,6 +149,12 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         data: { status: "PAID", confirmedAt: new Date() },
       });
     });
+    // Notify the user (non-blocking).
+    const u = await db.user.findUnique({ where: { id: topup.userId }, select: { email: true } });
+    if (u?.email) {
+      const { subject, html } = topupApprovedEmail(topup.lingotes, topup.amountUsd);
+      void sendEmail({ to: u.email, subject, html }).catch(() => {});
+    }
     return { ok: true, lingotes: topup.lingotes };
   })
 

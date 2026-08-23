@@ -10,6 +10,16 @@ import {
   verifyPassword,
 } from "../lib/auth";
 import type { User } from "@prisma/client";
+import { sendEmail, verificationEmail } from "../lib/email";
+import { makeEmailToken, verifyEmailToken } from "../lib/emailToken";
+
+/** Fire-and-forget verification email. */
+async function sendVerification(user: { id: string; email: string }) {
+  const token = await makeEmailToken(user.id);
+  const link = `${WEB_ORIGIN}/api/auth/verify-email?token=${encodeURIComponent(token)}`;
+  const { subject, html } = verificationEmail(link);
+  await sendEmail({ to: user.email, subject, html });
+}
 
 const SESSION_TTL_DAYS = Number(process.env.SESSION_TTL_DAYS ?? 30);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:4321";
@@ -95,6 +105,8 @@ export const auth = new Elysia({ name: "auth" })
         userAgent: request.headers.get("user-agent") ?? undefined,
       });
       cookie[SESSION_COOKIE].set({ value: token, ...sessionCookieOpts(expiresAt) });
+      // Send the verification email (non-blocking).
+      void sendVerification(user).catch((e) => console.error("verification email failed", e));
       return { user: publicUser(user) };
     },
     {
@@ -108,6 +120,25 @@ export const auth = new Elysia({ name: "auth" })
       }),
     },
   )
+
+  // --- Verify email (link from the verification email) ---
+  .get("/auth/verify-email", async ({ query, set }) => {
+    const userId = query.token ? await verifyEmailToken(query.token) : null;
+    if (!userId) {
+      set.redirect = `${WEB_ORIGIN}/correo-verificado?ok=0`;
+      return;
+    }
+    await db.user.update({ where: { id: userId }, data: { emailVerified: new Date() } }).catch(() => {});
+    set.redirect = `${WEB_ORIGIN}/correo-verificado?ok=1`;
+  }, { query: t.Object({ token: t.Optional(t.String()) }) })
+
+  // --- Resend verification email ---
+  .post("/auth/resend-verification", async ({ user, set }: any) => {
+    if (!user) { set.status = 401; return { error: "unauthenticated" }; }
+    if (user.emailVerified) return { ok: true, already: true };
+    await sendVerification(user).catch(() => {});
+    return { ok: true };
+  })
 
   // --- Login ---
   .post(

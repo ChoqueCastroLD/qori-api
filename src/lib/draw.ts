@@ -2,6 +2,7 @@ import { db } from "../db";
 import { applyLedger } from "./wallet";
 import { hmacSha256Hex, sha256Hex } from "../fair";
 import { generateShow, type GameType } from "../show";
+import { sendEmail, winnerEmail } from "./email";
 
 /** Fetch the latest drand round (public verifiable randomness beacon). */
 export async function fetchDrandLatest(): Promise<{ round: number; randomness: string }> {
@@ -87,6 +88,16 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
       create: { raffleId, stages: show as any, startsAt: new Date(), endsAt: null },
     });
   });
+
+  // Notify winners by email (non-blocking).
+  for (const wt of winnerTickets) {
+    if (!wt.ownerId) continue;
+    const owner = await db.user.findUnique({ where: { id: wt.ownerId }, select: { email: true } });
+    if (owner?.email) {
+      const { subject, html } = winnerEmail(raffle.title, wt.number, raffle.slug);
+      void sendEmail({ to: owner.email, subject, html }).catch(() => {});
+    }
+  }
 
   return {
     winners: winnerTickets.map((wt, i) => ({ position: i + 1, number: wt.number })),
