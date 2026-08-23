@@ -4,6 +4,7 @@ import { applyLedger, InsufficientFundsError } from "../lib/wallet";
 import { publicUser, withUser } from "./auth";
 import type { User } from "@prisma/client";
 import { createPreference, mpConfigured } from "../lib/mercadopago";
+import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypal";
 
 /** 1 USD = 10 lingotes (fixed). */
 const LINGOTES_PER_USD = 10;
@@ -255,6 +256,21 @@ export const me = new Elysia({ name: "me" })
           console.error("mp preference error", e);
           set.status = 502;
           return { error: "mp_error", topup };
+        }
+      }
+      if (body.method === "PAYPAL") {
+        if (!paypalConfigured()) {
+          set.status = 503;
+          return { error: "paypal_not_configured", topup };
+        }
+        try {
+          const order = await createPaypalOrder({ topupId: topup.id, amountUsd: topup.amountUsd });
+          await db.topUp.update({ where: { id: topup.id }, data: { providerRef: order.id } });
+          return { topup, checkoutUrl: order.url };
+        } catch (e) {
+          console.error("paypal order error", e);
+          set.status = 502;
+          return { error: "paypal_error", topup };
         }
       }
       return { topup };
