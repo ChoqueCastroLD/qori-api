@@ -1,10 +1,8 @@
 import { Elysia, t } from "elysia";
 import { db } from "../db";
-import { applyLedger } from "../lib/wallet";
 import { createCommitment } from "../fair";
 import { withUser } from "./auth";
 import { executeDraw, refundRaffle } from "../lib/draw";
-import { sendEmail, topupApprovedEmail } from "../lib/email";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
@@ -114,58 +112,16 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     return { ok: true, refundedOrders };
   })
 
-  // --- Top-ups moderation ---
+  // Read-only topups view (all recharges are automatic via MP/PayPal now; no
+  // manual approval — that could credit unconfirmed payments).
   .get("/topups", async ({ query }) => {
-    const status = (query.status as string) ?? "PENDING";
-    const topups = await db.topUp.findMany({
+    const status = (query.status as string) ?? "PAID";
+    return db.topUp.findMany({
       where: { status: status as any },
       include: { user: { select: { email: true, nickname: true } } },
       orderBy: { createdAt: "desc" },
+      take: 200,
     });
-    return topups;
-  })
-
-  .post("/topups/:id/approve", async ({ params, headers, set }) => {
-    const topup = await db.topUp.findUnique({ where: { id: params.id } });
-    if (!topup) {
-      set.status = 404;
-      return { error: "not_found" };
-    }
-    if (topup.status === "PAID") {
-      set.status = 409;
-      return { error: "already_paid" };
-    }
-    await db.$transaction(async (tx) => {
-      await applyLedger(tx, {
-        userId: topup.userId,
-        amount: topup.lingotes,
-        type: "TOPUP",
-        refType: "topup",
-        refId: topup.id,
-        memo: `Recarga ${topup.method} $${(topup.amountUsd / 100).toFixed(2)}`,
-      });
-      await tx.topUp.update({
-        where: { id: topup.id },
-        data: { status: "PAID", confirmedAt: new Date() },
-      });
-    });
-    // Notify the user (non-blocking).
-    const u = await db.user.findUnique({ where: { id: topup.userId }, select: { email: true } });
-    if (u?.email) {
-      const { subject, html } = topupApprovedEmail(topup.lingotes, topup.amountUsd);
-      void sendEmail({ to: u.email, subject, html }).catch(() => {});
-    }
-    return { ok: true, lingotes: topup.lingotes };
-  })
-
-  .post("/topups/:id/reject", async ({ params, set }) => {
-    const topup = await db.topUp.findUnique({ where: { id: params.id } });
-    if (!topup) {
-      set.status = 404;
-      return { error: "not_found" };
-    }
-    await db.topUp.update({ where: { id: params.id }, data: { status: "FAILED" } });
-    return { ok: true };
   })
 
   .get("/orders", async () => {

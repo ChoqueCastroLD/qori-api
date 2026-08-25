@@ -1,8 +1,33 @@
 import { db } from "./db";
 import { executeDraw, refundRaffle } from "./lib/draw";
+import { captureOrder } from "./lib/paypal";
+import { searchApprovedPayment } from "./lib/mercadopago";
+import { creditTopupIfPending } from "./lib/topups";
 
 const MAX_EXTENSIONS = 5; // after this many +24h extensions, cancel + refund
 const EXTEND_MS = 24 * 60 * 60 * 1000;
+
+// Catch payments that completed at the provider but never got credited (e.g. the
+// user closed the tab before returning, or a webhook was missed).
+async function reconcileTopups() {
+  const now = Date.now();
+  const window = { gt: new Date(now - 3 * 24 * 60 * 60 * 1000), lt: new Date(now - 90 * 1000) };
+  const pending = await db.topUp.findMany({
+    where: { status: "PENDING", createdAt: window, method: { in: ["PAYPAL", "MERCADOPAGO"] } },
+    take: 50,
+  });
+  for (const t of pending) {
+    try {
+      if (t.method === "PAYPAL" && t.providerRef) {
+        const cap = await captureOrder(t.providerRef);
+        if (cap.completed && cap.topupId) await creditTopupIfPending(cap.topupId, { providerRef: t.providerRef, memoLabel: "Recarga PayPal" });
+      } else if (t.method === "MERCADOPAGO") {
+        const pay = await searchApprovedPayment(t.id);
+        if (pay) await creditTopupIfPending(t.id, { providerRef: pay.id, memoLabel: "Recarga MercadoPago" });
+      }
+    } catch { /* ignore; retried next tick */ }
+  }
+}
 
 async function tick() {
   const now = new Date();
@@ -28,6 +53,7 @@ async function tick() {
       console.error(`⏰ scheduler error en ${r.slug}:`, e);
     }
   }
+  await reconcileTopups().catch((e) => console.error("⏰ reconcile error", e));
 }
 
 /** Start the background loop that auto-closes/draws/extends raffles by their clock. */

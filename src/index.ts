@@ -126,6 +126,7 @@ const app = new Elysia({ prefix: "/api" })
       comment: t.comment,
       nickname: t.owner?.nickname ?? null,
       avatarUrl: t.owner?.avatarUrl ?? null,
+      boughtAt: t.createdAt,
     }));
     return {
       raffle: { slug: raffle.slug, title: raffle.title, winnersCount: raffle.winnersCount },

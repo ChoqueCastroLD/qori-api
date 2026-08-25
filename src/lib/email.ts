@@ -97,6 +97,20 @@ export function topupApprovedEmail(lingotes: number, amountUsd: number): { subje
   };
 }
 
+export function purchaseEmail(raffleTitle: string, numbers: number[], slug: string): { subject: string; html: string } {
+  const chips = numbers
+    .map((n) => `<span style="display:inline-block;background:#f1f5f9;border-radius:8px;padding:4px 10px;margin:3px;font-family:monospace;font-weight:700;color:#0f172a">#${n}</span>`)
+    .join("");
+  return {
+    subject: `Boletos confirmados · ${raffleTitle}`,
+    html: template({
+      heading: "¡Ya estás participando! 🎟️",
+      body: `Compraste ${numbers.length} boleto(s) de <strong>${raffleTitle}</strong>. Tus números:<div style="margin-top:12px">${chips}</div>`,
+      cta: { label: "Ver el sorteo", url: `${WEB_ORIGIN}/sorteos/${slug}` },
+    }),
+  };
+}
+
 export function winnerEmail(raffleTitle: string, ticketNumber: number, slug: string): { subject: string; html: string } {
   return {
     subject: `🏆 ¡Ganaste ${raffleTitle}!`,

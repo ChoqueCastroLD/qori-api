@@ -5,6 +5,7 @@ import { publicUser, withUser } from "./auth";
 import type { User } from "@prisma/client";
 import { createPreference, mpConfigured } from "../lib/mercadopago";
 import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypal";
+import { sendEmail, purchaseEmail } from "../lib/email";
 
 /** 1 USD = 10 lingotes (fixed). */
 const LINGOTES_PER_USD = 10;
@@ -199,10 +200,16 @@ export const me = new Elysia({ name: "me" })
             await tx.user.update({ where: { id: user.id }, data: { referralRewarded: true } });
           }
 
-          return { orderId: order.id, numbers: chosen.sort((a, b) => a - b) };
+          return { orderId: order.id, numbers: chosen.sort((a, b) => a - b), raffleTitle: raffle.title, slug: raffle.slug };
         });
 
-        return { ok: true, ...result };
+        // Purchase confirmation email (non-blocking).
+        if (user.email) {
+          const { subject, html } = purchaseEmail(result.raffleTitle, result.numbers, result.slug);
+          void sendEmail({ to: user.email, subject, html }).catch(() => {});
+        }
+
+        return { ok: true, orderId: result.orderId, numbers: result.numbers };
       } catch (e: any) {
         if (e instanceof InsufficientFundsError) {
           set.status = 402;
