@@ -47,7 +47,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
           winnersCount: body.winnersCount ?? 1,
           games: (body.games ?? ["ELIMINATION"]) as any,
           finale: (body.finale ?? null) as any,
-          entropySource: "drand (round programada a la hora del sorteo) + raíz de boletos",
+          entropySource: "drand (round programada a la hora del sorteo) + raíz de tickets",
           commitment,
           serverSeed,
           status: (body.status ?? "OPEN") as any,
@@ -110,6 +110,170 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     }
     const refundedOrders = await refundRaffle(raffle.id);
     return { ok: true, refundedOrders };
+  })
+
+  // Edit a raffle. Only the fields sent are updated. Lets the admin set an exact
+  // draw date/time (closesAt) or adjust limits after creation. A DRAWN or
+  // CANCELLED raffle is locked (its outcome is already published).
+  .patch(
+    "/raffles/:id",
+    async ({ params, body, set }) => {
+      const raffle = await db.raffle.findUnique({ where: { id: params.id } });
+      if (!raffle) {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      if (raffle.status === "DRAWN" || raffle.status === "CANCELLED") {
+        set.status = 409;
+        return { error: "locked", status: raffle.status };
+      }
+      const data: any = {};
+      if (body.title !== undefined) data.title = body.title;
+      if (body.description !== undefined) data.description = body.description;
+      if (body.images !== undefined) data.images = body.images;
+      if (body.prizeValue !== undefined) data.prizeValue = body.prizeValue;
+      if (body.ticketPrice !== undefined) data.ticketPrice = body.ticketPrice;
+      if (body.totalTickets !== undefined) data.totalTickets = body.totalTickets;
+      if (body.minTickets !== undefined) data.minTickets = body.minTickets;
+      if (body.maxTicketsPerUser !== undefined) data.maxTicketsPerUser = body.maxTicketsPerUser;
+      if (body.winnersCount !== undefined) data.winnersCount = body.winnersCount;
+      if (body.games !== undefined) data.games = body.games as any;
+      if (body.finale !== undefined) data.finale = (body.finale || null) as any;
+      if (body.status !== undefined) data.status = body.status as any;
+      if (body.closesAt !== undefined) data.closesAt = body.closesAt ? new Date(body.closesAt) : null;
+      const updated = await db.raffle.update({ where: { id: params.id }, data });
+      return { ok: true, id: updated.id, closesAt: updated.closesAt };
+    },
+    {
+      body: t.Object({
+        title: t.Optional(t.String()),
+        description: t.Optional(t.String()),
+        images: t.Optional(t.Array(t.String())),
+        prizeValue: t.Optional(t.Integer()),
+        ticketPrice: t.Optional(t.Integer({ minimum: 0 })),
+        totalTickets: t.Optional(t.Integer({ minimum: 1 })),
+        minTickets: t.Optional(t.Integer({ minimum: 1 })),
+        maxTicketsPerUser: t.Optional(t.Integer({ minimum: 1 })),
+        winnersCount: t.Optional(t.Integer({ minimum: 1 })),
+        games: t.Optional(t.Array(t.String())),
+        finale: t.Optional(t.String()),
+        status: t.Optional(t.String()),
+        closesAt: t.Optional(t.String()),
+      }),
+    },
+  )
+
+  // Per-raffle breakdown: economics + full participant table (who bought, when,
+  // how many, their comment, account age, current lingote balance).
+  .get("/raffles/:id/detail", async ({ params, set }) => {
+    const raffle = await db.raffle.findUnique({ where: { id: params.id } });
+    if (!raffle) {
+      set.status = 404;
+      return { error: "not_found" };
+    }
+    const orders = await db.order.findMany({
+      where: { raffleId: raffle.id, status: "CONFIRMED" },
+      include: {
+        user: { select: { id: true, nickname: true, email: true, country: true, createdAt: true, balance: true } },
+        tickets: { select: { number: true, comment: true } },
+      },
+      orderBy: { createdAt: "asc" },
+    });
+    const soldTickets = await db.ticket.count({ where: { raffleId: raffle.id, ownerId: { not: null } } });
+
+    type Row = {
+      userId: string; nickname: string | null; email: string; country: string | null;
+      accountCreatedAt: Date; balance: number; tickets: number; lingotesSpent: number;
+      firstBoughtAt: Date; lastBoughtAt: Date; numbers: number[]; comments: string[];
+    };
+    const byUser = new Map<string, Row>();
+    for (const o of orders) {
+      let row = byUser.get(o.userId);
+      if (!row) {
+        row = {
+          userId: o.userId, nickname: o.user.nickname, email: o.user.email, country: o.user.country,
+          accountCreatedAt: o.user.createdAt, balance: o.user.balance, tickets: 0, lingotesSpent: 0,
+          firstBoughtAt: o.createdAt, lastBoughtAt: o.createdAt, numbers: [], comments: [],
+        };
+        byUser.set(o.userId, row);
+      }
+      row.tickets += o.quantity;
+      row.lingotesSpent += o.costLingotes;
+      if (o.createdAt < row.firstBoughtAt) row.firstBoughtAt = o.createdAt;
+      if (o.createdAt > row.lastBoughtAt) row.lastBoughtAt = o.createdAt;
+      for (const tk of o.tickets) {
+        row.numbers.push(tk.number);
+        if (tk.comment && tk.comment.trim()) row.comments.push(tk.comment.trim());
+      }
+    }
+    const participants = [...byUser.values()].sort((a, b) => b.tickets - a.tickets);
+
+    const revenueLingotes = orders.reduce((s, o) => s + o.costLingotes, 0);
+    // 1 USD = 10 lingotes. Revenue is the real money value of tickets sold.
+    const revenueUsdCents = Math.round((revenueLingotes / 10) * 100);
+    const prizeCostUsdCents = raffle.legacy ? 0 : raffle.prizeValue;
+    const profitUsdCents = revenueUsdCents - prizeCostUsdCents;
+
+    return {
+      raffle: {
+        id: raffle.id, slug: raffle.slug, title: raffle.title, status: raffle.status,
+        legacy: raffle.legacy, totalTickets: raffle.totalTickets, minTickets: raffle.minTickets,
+        ticketPrice: raffle.ticketPrice, prizeValue: raffle.prizeValue,
+        opensAt: raffle.opensAt, closesAt: raffle.closesAt, drawnAt: raffle.drawnAt,
+        extensionCount: raffle.extensionCount, extensions: raffle.extensions ?? [],
+      },
+      metrics: {
+        soldTickets,
+        fillPct: raffle.totalTickets ? Math.round((soldTickets / raffle.totalTickets) * 100) : 0,
+        uniqueBuyers: participants.length,
+        orders: orders.length,
+        revenueLingotes, revenueUsdCents, prizeCostUsdCents, profitUsdCents,
+        reachedMin: soldTickets >= raffle.minTickets,
+      },
+      participants,
+    };
+  })
+
+  // Platform-wide dashboard metrics.
+  .get("/metrics", async () => {
+    const now = Date.now();
+    const weekAgo = new Date(now - 7 * 86400000);
+    const [
+      usersTotal, usersVerified, usersNew7d, rafflesGrouped, soldTickets,
+      paidTopups, confirmedOrders, balanceAgg, drawnPrizes,
+    ] = await Promise.all([
+      db.user.count(),
+      db.user.count({ where: { emailVerified: { not: null } } }),
+      db.user.count({ where: { createdAt: { gte: weekAgo } } }),
+      db.raffle.groupBy({ by: ["status"], _count: { _all: true } }),
+      db.ticket.count({ where: { ownerId: { not: null } } }),
+      db.topUp.aggregate({ where: { status: "PAID" }, _sum: { amountUsd: true, lingotes: true }, _count: { _all: true } }),
+      db.order.aggregate({ where: { status: "CONFIRMED" }, _sum: { costLingotes: true }, _count: { _all: true } }),
+      db.user.aggregate({ _sum: { balance: true } }),
+      db.raffle.aggregate({ where: { status: "DRAWN", legacy: false }, _sum: { prizeValue: true }, _count: { _all: true } }),
+    ]);
+    const rafflesByStatus: Record<string, number> = {};
+    for (const g of rafflesGrouped) rafflesByStatus[g.status] = g._count._all;
+
+    const revenueUsdCents = paidTopups._sum.amountUsd ?? 0;
+    const lingotesSold = paidTopups._sum.lingotes ?? 0;
+    const lingotesSpent = confirmedOrders._sum.costLingotes ?? 0;
+    const lingotesCirculating = balanceAgg._sum.balance ?? 0;
+    const prizeAwardedUsdCents = drawnPrizes._sum.prizeValue ?? 0;
+
+    return {
+      users: { total: usersTotal, verified: usersVerified, new7d: usersNew7d },
+      raffles: { byStatus: rafflesByStatus, drawn: drawnPrizes._count._all },
+      tickets: { sold: soldTickets },
+      money: {
+        revenueUsdCents,
+        topups: paidTopups._count._all,
+        prizeAwardedUsdCents,
+        grossMarginUsdCents: revenueUsdCents - prizeAwardedUsdCents,
+        lingotesSold, lingotesSpent, lingotesCirculating,
+        orders: confirmedOrders._count._all,
+      },
+    };
   })
 
   // Read-only topups view (all recharges are automatic via MP/PayPal now; no

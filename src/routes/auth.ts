@@ -233,8 +233,10 @@ export const auth = new Elysia({ name: "auth" })
   })
 
   // --- Current user --- (200 with user:null for anonymous, to avoid console noise)
-  .get("/auth/me", ({ user }) => {
-    return { user: user ? publicUser(user) : null };
+  .get("/auth/me", async ({ user }) => {
+    if (!user) return { user: null };
+    const ticketCount = await db.ticket.count({ where: { ownerId: user.id } });
+    return { user: { ...publicUser(user), ticketCount } };
   })
 
   // --- Google OAuth: start ---

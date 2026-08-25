@@ -8,7 +8,7 @@ const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "https://qori.cc";
 /** Low-level send. Resolves false (and logs) if not configured or on error. */
 export async function sendEmail(opts: { to: string; subject: string; html: string }): Promise<boolean> {
   if (!RESEND_API_KEY) {
-    console.warn("✉️  RESEND_API_KEY no configurada; email omitido:", opts.subject);
+    console.warn("RESEND_API_KEY no configurada; email omitido:", opts.subject);
     return false;
   }
   try {
@@ -18,12 +18,12 @@ export async function sendEmail(opts: { to: string; subject: string; html: strin
       body: JSON.stringify({ from: EMAIL_FROM, to: opts.to, subject: opts.subject, html: opts.html }),
     });
     if (!res.ok) {
-      console.error("✉️  Resend error", res.status, await res.text().catch(() => ""));
+      console.error("Resend error", res.status, await res.text().catch(() => ""));
       return false;
     }
     return true;
   } catch (e) {
-    console.error("✉️  Resend fetch failed", e);
+    console.error("Resend fetch failed", e);
     return false;
   }
 }
@@ -102,10 +102,10 @@ export function purchaseEmail(raffleTitle: string, numbers: number[], slug: stri
     .map((n) => `<span style="display:inline-block;background:#f1f5f9;border-radius:8px;padding:4px 10px;margin:3px;font-family:monospace;font-weight:700;color:#0f172a">#${n}</span>`)
     .join("");
   return {
-    subject: `Boletos confirmados · ${raffleTitle}`,
+    subject: `Tickets confirmados · ${raffleTitle}`,
     html: template({
-      heading: "¡Ya estás participando! 🎟️",
-      body: `Compraste ${numbers.length} boleto(s) de <strong>${raffleTitle}</strong>. Tus números:<div style="margin-top:12px">${chips}</div>`,
+      heading: "¡Ya estás participando!",
+      body: `Compraste ${numbers.length} ticket(s) de <strong>${raffleTitle}</strong>. Tus números:<div style="margin-top:12px">${chips}</div>`,
       cta: { label: "Ver el sorteo", url: `${WEB_ORIGIN}/sorteos/${slug}` },
     }),
   };
@@ -113,9 +113,9 @@ export function purchaseEmail(raffleTitle: string, numbers: number[], slug: stri
 
 export function closingSoonEmail(raffleTitle: string, slug: string): { subject: string; html: string } {
   return {
-    subject: `⏰ Se sortea pronto: ${raffleTitle}`,
+    subject: `Se sortea pronto: ${raffleTitle}`,
     html: template({
-      heading: "Tu sorteo está por comenzar ⏰",
+      heading: "Tu sorteo está por comenzar",
       body: `El sorteo de <strong>${raffleTitle}</strong> se realizará muy pronto. Prepárate para verlo en vivo: el show revela al ganador etapa por etapa.`,
       cta: { label: "Ver el sorteo", url: `${WEB_ORIGIN}/sorteos/${slug}` },
     }),
@@ -124,9 +124,9 @@ export function closingSoonEmail(raffleTitle: string, slug: string): { subject: 
 
 export function drawLiveEmail(raffleTitle: string, slug: string): { subject: string; html: string } {
   return {
-    subject: `🔴 EN VIVO: se sortea ${raffleTitle}`,
+    subject: `EN VIVO ahora: se sortea ${raffleTitle}`,
     html: template({
-      heading: "¡El sorteo es AHORA! 🔴",
+      heading: "¡El sorteo es AHORA!",
       body: `El sorteo de <strong>${raffleTitle}</strong> está en vivo. Entra a ver el show y descubre al ganador en tiempo real, sincronizado para todos.`,
       cta: { label: "Ver en vivo", url: `${WEB_ORIGIN}/sorteos/${slug}/show` },
     }),
@@ -137,8 +137,8 @@ export function resultsEmail(raffleTitle: string, slug: string, winnerNumbers: n
   const nums = winnerNumbers.map((n) => "#" + n).join(", ");
   const cerca =
     lugares <= 1
-      ? "Tu boleto quedó a un lugar de ganar. De todos los participantes, fuiste quien estuvo más cerca."
-      : `Tu mejor boleto quedó a ${lugares} lugares de ganar.`;
+      ? "Tu ticket quedó a un lugar de ganar. De todos los participantes, fuiste quien estuvo más cerca."
+      : `Tu mejor ticket quedó a ${lugares} lugares de ganar.`;
   return {
     subject: `Resultado de ${raffleTitle}`,
     html: template({
@@ -153,8 +153,8 @@ export function postponedEmail(raffleTitle: string, slug: string, newDate: strin
   return {
     subject: `El sorteo de ${raffleTitle} se postergó 24 h`,
     html: template({
-      heading: "Se postergó 24 horas ⏳",
-      body: `El sorteo de <strong>${raffleTitle}</strong> aún no alcanza el mínimo de boletos, así que lo postergamos 24 h (nueva fecha: <strong>${newDate}</strong>). ¡Ayúdanos a llenarlo! Invita con tu código <strong>${referralCode}</strong> y gana 10 lingotes cuando tu referido haga su primera compra.`,
+      heading: "Se postergó 24 horas",
+      body: `El sorteo de <strong>${raffleTitle}</strong> aún no alcanza el mínimo de tickets, así que lo postergamos 24 h (nueva fecha: <strong>${newDate}</strong>). ¡Ayúdanos a llenarlo! Invita con tu código <strong>${referralCode}</strong> y gana 10 lingotes cuando tu referido haga su primera compra.`,
       cta: { label: "Ver el sorteo", url: `${WEB_ORIGIN}/sorteos/${slug}` },
     }),
   };
@@ -162,10 +162,10 @@ export function postponedEmail(raffleTitle: string, slug: string, newDate: strin
 
 export function winnerEmail(raffleTitle: string, ticketNumber: number, slug: string): { subject: string; html: string } {
   return {
-    subject: `🏆 ¡Ganaste ${raffleTitle}!`,
+    subject: `¡Ganaste ${raffleTitle}!`,
     html: template({
-      heading: "¡Felicidades, ganaste! 🏆",
-      body: `Tu boleto <strong>#${ticketNumber}</strong> resultó ganador de <strong>${raffleTitle}</strong>. Te contactaremos para coordinar la entrega. También puedes ver y verificar el sorteo.`,
+      heading: "¡Felicidades, ganaste!",
+      body: `Tu ticket <strong>#${ticketNumber}</strong> resultó ganador de <strong>${raffleTitle}</strong>. Te contactaremos para coordinar la entrega. También puedes ver y verificar el sorteo.`,
       cta: { label: "Ver el resultado", url: `${WEB_ORIGIN}/sorteos/${slug}` },
     }),
   };

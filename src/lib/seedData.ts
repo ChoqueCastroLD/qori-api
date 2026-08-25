@@ -73,7 +73,7 @@ export async function seedData(db: PrismaClient) {
         prizeValue: opts.prizeUsd * 100, ticketPrice: opts.priceLingotes,
         totalTickets: opts.total, minTickets: opts.min, maxTicketsPerUser: 50,
         winnersCount: opts.winnersCount, games, finale: opts.finale,
-        entropySource: "drand (round a la hora del sorteo) + raíz de boletos",
+        entropySource: "drand (round a la hora del sorteo) + raíz de tickets",
         commitment, serverSeed, status: "OPEN", opensAt: new Date(),
         closesAt: new Date(Date.now() + opts.closesInHours * 3600 * 1000),
       },

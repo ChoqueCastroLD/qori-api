@@ -135,7 +135,7 @@ export const me = new Elysia({ name: "me" })
             type: "TICKET_SPEND",
             refType: "raffle",
             refId: raffle.id,
-            memo: `${quantity} boleto(s) de ${raffle.title}`,
+            memo: `${quantity} ticket(s) de ${raffle.title}`,
           });
 
           const order = await tx.order.create({
