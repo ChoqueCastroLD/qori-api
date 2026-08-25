@@ -221,6 +221,7 @@ model Raffle {
   closesAt       DateTime? // scheduled draw time
   drawnAt        DateTime?
   extensionCount Int       @default(0) // +24h auto-extensions applied
+  extensions     Json?     // log of each postponement [{at, ticketCount, minTickets, from, to}]
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt

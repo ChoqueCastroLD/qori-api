@@ -40,9 +40,12 @@ async function tick() {
         if (res) console.log(`⏰ auto-draw ${r.slug} → ganador(es) ${res.winners.map((w) => "#" + w.number).join(", ")}`);
       } else if (r.extensionCount < MAX_EXTENSIONS) {
         // Not enough tickets yet: push the draw 24h to give more time (cuida el profit).
+        const to = new Date(now.getTime() + EXTEND_MS);
+        const prev = Array.isArray(r.extensions) ? (r.extensions as any[]) : [];
+        const entry = { at: now.toISOString(), ticketCount: count, minTickets: r.minTickets, from: r.closesAt, to };
         await db.raffle.update({
           where: { id: r.id },
-          data: { closesAt: new Date(now.getTime() + EXTEND_MS), extensionCount: { increment: 1 } },
+          data: { closesAt: to, extensionCount: { increment: 1 }, extensions: [...prev, entry] as any },
         });
         console.log(`⏰ auto-extend +24h ${r.slug} (${count}/${r.minTickets}, extensión ${r.extensionCount + 1})`);
       } else {

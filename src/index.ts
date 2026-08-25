@@ -36,6 +36,7 @@ function publicRaffle(r: any) {
     closesAt: r.closesAt,
     drawnAt: r.drawnAt,
     extensionCount: r.extensionCount,
+    extensions: r.extensions ?? [],
     ticketsSold: r._count?.tickets ?? undefined,
     fairness: {
       commitment: r.commitment,
