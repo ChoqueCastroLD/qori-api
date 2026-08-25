@@ -54,7 +54,7 @@ function template(opts: { heading: string; body: string; cta?: { label: string; 
       </table>
       <p style="max-width:520px;margin:20px auto 0;font-size:12px;color:#94a3b8;text-align:center">
         Sorteos de productos transparentes y verificables. Juega con responsabilidad. Solo mayores de 18 años.<br>
-        <a href="${WEB_ORIGIN}" style="color:#94a3b8">qori.cc</a>
+        <a href="${WEB_ORIGIN}" style="color:#94a3b8">qori.cc</a> · ¿Dudas? <a href="mailto:support@qori.cc" style="color:#94a3b8">support@qori.cc</a>
       </p>
     </td></tr>
   </table></body></html>`;
