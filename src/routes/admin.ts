@@ -3,6 +3,7 @@ import { db } from "../db";
 import { createCommitment } from "../fair";
 import { withUser } from "./auth";
 import { executeDraw, refundRaffle } from "../lib/draw";
+import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
@@ -75,6 +76,27 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         status: t.Optional(t.String()),
       }),
     },
+  )
+
+  // Upload a raffle image to R2, returns its public URL.
+  .post(
+    "/upload",
+    async ({ body, set }) => {
+      if (!storageConfigured()) { set.status = 503; return { error: "storage_not_configured" }; }
+      const file = body.file as File;
+      const ext = extForType(file.type);
+      if (!ext) { set.status = 415; return { error: "unsupported_type" }; }
+      if (file.size > MAX_UPLOAD_BYTES) { set.status = 413; return { error: "too_large" }; }
+      try {
+        const key = `raffles/${crypto.randomUUID()}.${ext}`;
+        const url = await uploadObject(key, await file.arrayBuffer(), file.type);
+        return { url };
+      } catch (e) {
+        set.status = 502;
+        return { error: "upload_failed" };
+      }
+    },
+    { body: t.Object({ file: t.File() }) },
   )
 
   // Run the draw now (manual). Uses the shared engine (drand + show + reveal).

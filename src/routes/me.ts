@@ -6,6 +6,7 @@ import type { User } from "@prisma/client";
 import { createPreference, mpConfigured } from "../lib/mercadopago";
 import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypal";
 import { sendEmail, purchaseEmail } from "../lib/email";
+import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
 
 /** 1 USD = 10 lingotes (fixed). */
 const LINGOTES_PER_USD = 10;
@@ -49,6 +50,29 @@ export const me = new Elysia({ name: "me" })
         country: t.Optional(t.String({ minLength: 2, maxLength: 2 })),
       }),
     },
+  )
+
+  // --- Avatar upload (R2) ---
+  .post(
+    "/me/avatar",
+    async ({ user, body, set }) => {
+      if (!requireUser(user, set)) return { error: "unauthenticated" };
+      if (!storageConfigured()) { set.status = 503; return { error: "storage_not_configured" }; }
+      const file = body.file as File;
+      const ext = extForType(file.type);
+      if (!ext) { set.status = 415; return { error: "unsupported_type" }; }
+      if (file.size > MAX_UPLOAD_BYTES) { set.status = 413; return { error: "too_large" }; }
+      try {
+        const key = `avatars/${user.id}/${crypto.randomUUID()}.${ext}`;
+        const url = await uploadObject(key, await file.arrayBuffer(), file.type);
+        const updated = await db.user.update({ where: { id: user.id }, data: { avatarUrl: url } });
+        return { url, user: publicUser(updated) };
+      } catch (e) {
+        set.status = 502;
+        return { error: "upload_failed" };
+      }
+    },
+    { body: t.Object({ file: t.File() }) },
   )
 
   // --- Wallet: ledger history + balance ---
