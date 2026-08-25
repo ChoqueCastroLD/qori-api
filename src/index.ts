@@ -16,6 +16,10 @@ const PORT = Number(process.env.PORT ?? 3000);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:4321";
 
 /** Public-safe view of a raffle: never leaks an unrevealed serverSeed. */
+// Short-lived cache for the public raffles list (see GET /raffles).
+const RAFFLES_TTL_MS = 8000;
+let rafflesCache: { at: number; data: any } | null = null;
+
 function publicRaffle(r: any) {
   return {
     id: r.id,
@@ -65,7 +69,14 @@ const app = new Elysia({ prefix: "/api" })
   .get("/fx", () => getRates())
 
   // --- Public raffle browsing ---
-  .get("/raffles", async () => {
+  // Short in-memory cache: this list feeds home/sorteos/ganadores/recargar SSR,
+  // so a few seconds of staleness on ticket counts is fine and cuts TTFB.
+  .get("/raffles", async ({ set }) => {
+    const now = Date.now();
+    if (rafflesCache && now - rafflesCache.at < RAFFLES_TTL_MS) {
+      set.headers["cache-control"] = "public, max-age=8";
+      return rafflesCache.data;
+    }
     const raffles = await db.raffle.findMany({
       where: { status: { in: ["OPEN", "CLOSED", "DRAWING", "DRAWN"] } },
       orderBy: [{ status: "asc" }, { closesAt: "asc" }, { createdAt: "desc" }],
@@ -74,7 +85,7 @@ const app = new Elysia({ prefix: "/api" })
         winners: { include: { ticket: true, user: true }, orderBy: { position: "asc" } },
       },
     });
-    return raffles.map((r) => ({
+    const data = raffles.map((r) => ({
       ...publicRaffle(r),
       winners: r.winners.map((w) => ({
         position: w.position,
@@ -83,6 +94,9 @@ const app = new Elysia({ prefix: "/api" })
         avatarUrl: w.user?.avatarUrl ?? null,
       })),
     }));
+    rafflesCache = { at: now, data };
+    set.headers["cache-control"] = "public, max-age=8";
+    return data;
   })
 
   .get("/raffles/:slug", async ({ params, set }) => {
