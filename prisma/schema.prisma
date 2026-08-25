@@ -202,6 +202,8 @@ model Raffle {
   maxTicketsPerUser Int? // anti-hoarding; null = unlimited
   winnersCount     Int @default(1)
   status      RaffleStatus @default(DRAFT)
+  // Historical raffle done manually before the platform → not provably-fair.
+  legacy      Boolean      @default(false)
 
   // Which games run in the show. Order is randomized deterministically at draw
   // time; the flashiest game (finale) is placed last.
@@ -285,6 +287,7 @@ model Winner {
   ticketId String @unique
   user     User?  @relation(fields: [userId], references: [id])
   userId   String?
+  name     String? // display name for legacy winners without a platform account
   position Int    @default(1) // 1 = first winner, for multi-winner raffles
   createdAt DateTime @default(now())
 

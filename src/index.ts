@@ -32,6 +32,7 @@ function publicRaffle(r: any) {
     games: r.games,
     finale: r.finale,
     status: r.status,
+    legacy: r.legacy,
     opensAt: r.opensAt,
     closesAt: r.closesAt,
     drawnAt: r.drawnAt,
@@ -78,7 +79,7 @@ const app = new Elysia({ prefix: "/api" })
       winners: r.winners.map((w) => ({
         position: w.position,
         ticketNumber: w.ticket.number,
-        nickname: w.user?.nickname ?? null,
+        nickname: w.user?.nickname ?? w.name ?? null,
         avatarUrl: w.user?.avatarUrl ?? null,
       })),
     }));
@@ -101,7 +102,7 @@ const app = new Elysia({ prefix: "/api" })
       winners: raffle.winners.map((w) => ({
         position: w.position,
         ticketNumber: w.ticket.number,
-        nickname: w.user?.nickname ?? null,
+        nickname: w.user?.nickname ?? w.name ?? null,
         avatarUrl: w.user?.avatarUrl ?? null,
       })),
     };

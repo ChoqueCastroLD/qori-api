@@ -5,12 +5,46 @@ import { generateShow, type GameType } from "../show";
 import { drawLiveEmail } from "./email";
 import { participants, sendToAll } from "./notify";
 
-/** Fetch the latest drand round (public verifiable randomness beacon). */
+const DRAND_BASE = "https://api.drand.sh";
+
+/** Fetch the latest drand round (fallback only). */
 export async function fetchDrandLatest(): Promise<{ round: number; randomness: string }> {
-  const res = await fetch("https://api.drand.sh/public/latest");
+  const res = await fetch(`${DRAND_BASE}/public/latest`);
   if (!res.ok) throw new Error("drand_unreachable");
   const j = (await res.json()) as { round: number; randomness: string };
   return { round: j.round, randomness: j.randomness };
+}
+
+// drand chain params (genesis + period), cached. Used to map a time → round.
+let drandInfoCache: { genesis: number; period: number } | null = null;
+async function drandInfo(): Promise<{ genesis: number; period: number }> {
+  if (drandInfoCache) return drandInfoCache;
+  const res = await fetch(`${DRAND_BASE}/info`);
+  const j = (await res.json()) as { genesis_time: number; period: number };
+  drandInfoCache = { genesis: j.genesis_time, period: j.period };
+  return drandInfoCache;
+}
+function roundAt(timeSec: number, genesis: number, period: number): number {
+  if (timeSec <= genesis) return 1;
+  return Math.floor((timeSec - genesis) / period) + 1;
+}
+async function fetchDrandRound(round: number): Promise<{ round: number; randomness: string } | null> {
+  const res = await fetch(`${DRAND_BASE}/public/${round}`);
+  if (!res.ok) return null; // not published yet
+  const j = (await res.json()) as { round: number; randomness: string };
+  return { round: j.round, randomness: j.randomness };
+}
+
+/**
+ * The drand round fixed by the raffle's close time. The round number is fully
+ * determined by `closesAt` (public), and its VALUE stays unpredictable until
+ * that time — so neither the operator nor anyone else can grind or foresee it.
+ * Returns null if that round hasn't been published yet (draw not ready).
+ */
+export async function drandForCloseTime(closesAtMs: number): Promise<{ round: number; randomness: string } | null> {
+  const info = await drandInfo();
+  const round = roundAt(Math.floor(closesAtMs / 1000), info.genesis, info.period);
+  return fetchDrandRound(round);
 }
 
 /** Deterministic root binding the exact participant set into the entropy. */
@@ -51,7 +85,15 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
     return null;
   }
 
-  const drand = await fetchDrandLatest();
+  // Use the drand round fixed by the close time (no operator grinding). If that
+  // round isn't published yet, put the raffle back to OPEN and retry next tick.
+  const drand = raffle.closesAt
+    ? await drandForCloseTime(raffle.closesAt.getTime())
+    : await fetchDrandLatest();
+  if (!drand) {
+    await db.raffle.update({ where: { id: raffleId }, data: { status: "OPEN" } });
+    return null;
+  }
   const ticketsRoot = await computeTicketsRoot(raffleId);
   const publicEntropy = `${drand.round}:${drand.randomness}:${ticketsRoot}`;
   const digest = await hmacSha256Hex(raffle.serverSeed!, publicEntropy);
