@@ -292,6 +292,16 @@ model Winner {
   @@index([raffleId])
 }
 
+// Dedupe for lifecycle emails: one row per (raffle, kind) once sent.
+model NotificationLog {
+  id        String   @id @default(cuid())
+  raffleId  String
+  kind      String
+  createdAt DateTime @default(now())
+
+  @@unique([raffleId, kind])
+}
+
 // Pre-registration email verification codes (OTP). No account exists yet.
 model EmailVerification {
   id        String   @id @default(cuid())

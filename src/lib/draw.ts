@@ -2,7 +2,8 @@ import { db } from "../db";
 import { applyLedger } from "./wallet";
 import { hmacSha256Hex, sha256Hex } from "../fair";
 import { generateShow, type GameType } from "../show";
-import { sendEmail, winnerEmail } from "./email";
+import { drawLiveEmail } from "./email";
+import { participants, sendToAll } from "./notify";
 
 /** Fetch the latest drand round (public verifiable randomness beacon). */
 export async function fetchDrandLatest(): Promise<{ round: number; randomness: string }> {
@@ -89,15 +90,11 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
     });
   });
 
-  // Notify winners by email (non-blocking).
-  for (const wt of winnerTickets) {
-    if (!wt.ownerId) continue;
-    const owner = await db.user.findUnique({ where: { id: wt.ownerId }, select: { email: true } });
-    if (owner?.email) {
-      const { subject, html } = winnerEmail(raffle.title, wt.number, raffle.slug);
-      void sendEmail({ to: owner.email, subject, html }).catch(() => {});
-    }
-  }
+  // "EN VIVO ahora" to every participant (no spoiler). Winner + results emails
+  // are sent when the show ends, from the scheduler (sendResults).
+  void participants(raffleId)
+    .then((ps) => sendToAll(ps.map((p) => p.email), drawLiveEmail(raffle.title, raffle.slug)))
+    .catch(() => {});
 
   return {
     winners: winnerTickets.map((wt, i) => ({ position: i + 1, number: wt.number })),

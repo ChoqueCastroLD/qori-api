@@ -111,6 +111,55 @@ export function purchaseEmail(raffleTitle: string, numbers: number[], slug: stri
   };
 }
 
+export function closingSoonEmail(raffleTitle: string, slug: string): { subject: string; html: string } {
+  return {
+    subject: `⏰ Se sortea pronto: ${raffleTitle}`,
+    html: template({
+      heading: "Tu sorteo está por comenzar ⏰",
+      body: `El sorteo de <strong>${raffleTitle}</strong> se realizará muy pronto. Prepárate para verlo en vivo: el show revela al ganador etapa por etapa.`,
+      cta: { label: "Ver el sorteo", url: `${WEB_ORIGIN}/sorteos/${slug}` },
+    }),
+  };
+}
+
+export function drawLiveEmail(raffleTitle: string, slug: string): { subject: string; html: string } {
+  return {
+    subject: `🔴 EN VIVO: se sortea ${raffleTitle}`,
+    html: template({
+      heading: "¡El sorteo es AHORA! 🔴",
+      body: `El sorteo de <strong>${raffleTitle}</strong> está en vivo. Entra a ver el show y descubre al ganador en tiempo real, sincronizado para todos.`,
+      cta: { label: "Ver en vivo", url: `${WEB_ORIGIN}/sorteos/${slug}/show` },
+    }),
+  };
+}
+
+export function resultsEmail(raffleTitle: string, slug: string, winnerNumbers: number[], lugares: number): { subject: string; html: string } {
+  const nums = winnerNumbers.map((n) => "#" + n).join(", ");
+  const cerca =
+    lugares <= 1
+      ? "Tu boleto quedó a un lugar de ganar. De todos los participantes, fuiste quien estuvo más cerca."
+      : `Tu mejor boleto quedó a ${lugares} lugares de ganar.`;
+  return {
+    subject: `Resultado de ${raffleTitle}`,
+    html: template({
+      heading: "Estuviste cerca",
+      body: `El sorteo de <strong>${raffleTitle}</strong> ya tiene ganador: <strong>${nums}</strong>. ${cerca} Puedes comprobarlo tú mismo en la repetición del sorteo. Gracias por participar; ya se vienen nuevos premios.`,
+      cta: { label: "Ver la repetición", url: `${WEB_ORIGIN}/sorteos/${slug}/show` },
+    }),
+  };
+}
+
+export function postponedEmail(raffleTitle: string, slug: string, newDate: string, referralCode: string): { subject: string; html: string } {
+  return {
+    subject: `El sorteo de ${raffleTitle} se postergó 24 h`,
+    html: template({
+      heading: "Se postergó 24 horas ⏳",
+      body: `El sorteo de <strong>${raffleTitle}</strong> aún no alcanza el mínimo de boletos, así que lo postergamos 24 h (nueva fecha: <strong>${newDate}</strong>). ¡Ayúdanos a llenarlo! Invita con tu código <strong>${referralCode}</strong> y gana 10 lingotes cuando tu referido haga su primera compra.`,
+      cta: { label: "Ver el sorteo", url: `${WEB_ORIGIN}/sorteos/${slug}` },
+    }),
+  };
+}
+
 export function winnerEmail(raffleTitle: string, ticketNumber: number, slug: string): { subject: string; html: string } {
   return {
     subject: `🏆 ¡Ganaste ${raffleTitle}!`,
