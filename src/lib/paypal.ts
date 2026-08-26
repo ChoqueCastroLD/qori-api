@@ -50,8 +50,27 @@ export async function createOrder(t: { topupId: string; amountUsd: number }): Pr
   return { id: d.id, url: approve.href };
 }
 
-/** Capture an approved order. Returns COMPLETED + the topup id (custom_id). */
-export async function captureOrder(orderId: string): Promise<{ completed: boolean; topupId?: string }> {
+export interface FeeBreakdown {
+  chargeCurrency: string;
+  grossAmount: number; // minor units (cents)
+  feeAmount: number;
+  netAmount: number;
+}
+
+function breakdownFromCapture(cap: any): FeeBreakdown | undefined {
+  const b = cap?.seller_receivable_breakdown;
+  if (!b?.gross_amount) return undefined;
+  const m = (a: any) => (a ? Math.round(parseFloat(a.value) * 100) : 0);
+  return {
+    chargeCurrency: b.gross_amount.currency_code ?? "USD",
+    grossAmount: m(b.gross_amount),
+    feeAmount: m(b.paypal_fee),
+    netAmount: m(b.net_amount),
+  };
+}
+
+/** Capture an approved order. Returns COMPLETED + the topup id (custom_id) + fees. */
+export async function captureOrder(orderId: string): Promise<{ completed: boolean; topupId?: string; breakdown?: FeeBreakdown }> {
   const token = await accessToken();
   const res = await fetch(`${BASE}/v2/checkout/orders/${orderId}/capture`, {
     method: "POST",
@@ -59,7 +78,19 @@ export async function captureOrder(orderId: string): Promise<{ completed: boolea
   });
   const d = await res.json().catch(() => ({}));
   const pu = (d as any)?.purchase_units?.[0];
-  const topupId = pu?.custom_id ?? pu?.payments?.captures?.[0]?.custom_id;
+  const capture = pu?.payments?.captures?.[0];
+  const topupId = pu?.custom_id ?? capture?.custom_id;
   const completed = (d as any)?.status === "COMPLETED";
-  return { completed, topupId };
+  return { completed, topupId, breakdown: breakdownFromCapture(capture) };
+}
+
+/** Read an order's capture breakdown (for backfilling already-captured orders). */
+export async function getOrderBreakdown(orderId: string): Promise<FeeBreakdown | undefined> {
+  const token = await accessToken();
+  const res = await fetch(`${BASE}/v2/checkout/orders/${orderId}`, {
+    headers: { authorization: `Bearer ${token}` },
+  });
+  if (!res.ok) return undefined;
+  const d = (await res.json()) as any;
+  return breakdownFromCapture(d?.purchase_units?.[0]?.payments?.captures?.[0]);
 }

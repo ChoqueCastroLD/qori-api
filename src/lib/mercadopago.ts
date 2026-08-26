@@ -58,16 +58,33 @@ export async function createPreference(t: {
   return { id: d.id, url: d.init_point };
 }
 
+export interface FeeBreakdown {
+  chargeCurrency: string; // ISO code actually charged
+  grossAmount: number; // minor units (cents)
+  feeAmount: number;
+  netAmount: number;
+}
+
 /** Fetch a payment to confirm its real status (never trust the webhook blindly). */
 export async function getPayment(id: string): Promise<{
   status: string;
   external_reference?: string;
+  breakdown?: FeeBreakdown;
 } | null> {
   const res = await fetch(`https://api.mercadopago.com/v1/payments/${id}`, {
     headers: { authorization: `Bearer ${MP_TOKEN}` },
   });
   if (!res.ok) return null;
-  return res.json();
+  const j = (await res.json()) as any;
+  let breakdown: FeeBreakdown | undefined;
+  if (typeof j.transaction_amount === "number" && j.currency_id) {
+    const gross = j.transaction_amount;
+    const fee = (j.fee_details ?? []).reduce((s: number, f: any) => s + (f.amount || 0), 0);
+    const net = j.transaction_details?.net_received_amount ?? gross - fee;
+    const m = (v: number) => Math.round(v * 100);
+    breakdown = { chargeCurrency: j.currency_id, grossAmount: m(gross), feeAmount: m(fee), netAmount: m(net) };
+  }
+  return { status: j.status, external_reference: j.external_reference, breakdown };
 }
 
 /** Find an approved payment by our external_reference (for reconciliation). */

@@ -157,6 +157,13 @@ model TopUp {
   providerRef String?
   proofUrl    String?
 
+  // Settlement breakdown from the payment processor, in the CHARGE currency's
+  // minor units (e.g. PEN cents for MercadoPago, USD cents for PayPal).
+  chargeCurrency String? // ISO code actually charged (PEN, USD…)
+  grossAmount    Int? // what the buyer paid, charge currency
+  feeAmount      Int? // processor fee taken (MP/PayPal)
+  netAmount      Int? // what we actually receive
+
   confirmedAt   DateTime?
   confirmedBy   User?     @relation("TopUpConfirmedBy", fields: [confirmedById], references: [id])
   confirmedById String?

@@ -15,7 +15,7 @@ export const paypal = new Elysia({ name: "paypal" })
       try {
         const cap = await captureOrder(orderId);
         if (!cap.completed || !cap.topupId) return go("failure");
-        await creditTopupIfPending(cap.topupId, { providerRef: orderId, memoLabel: "Recarga PayPal" });
+        await creditTopupIfPending(cap.topupId, { providerRef: orderId, memoLabel: "Recarga PayPal", breakdown: cap.breakdown });
         return go("success");
       } catch (e) {
         console.error("paypal return error", e);

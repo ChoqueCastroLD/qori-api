@@ -4,6 +4,8 @@ import { createCommitment } from "../fair";
 import { withUser } from "./auth";
 import { executeDraw, refundRaffle } from "../lib/draw";
 import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
+import { getPayment } from "../lib/mercadopago";
+import { getOrderBreakdown } from "../lib/paypal";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
@@ -294,6 +296,57 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         grossMarginUsdCents: revenueUsdCents - prizeAwardedUsdCents,
         lingotesSold, lingotesSpent, lingotesCirculating,
         orders: confirmedOrders._count._all,
+      },
+    };
+  })
+
+  // Purchases (income): every recharge with the payment-processor fee breakdown.
+  // Lazily backfills fee data for confirmed topups that predate fee capture.
+  .get("/purchases", async () => {
+    const missing = await db.topUp.findMany({
+      where: { status: "PAID", grossAmount: null, providerRef: { not: null } },
+      take: 50,
+    });
+    for (const t of missing) {
+      try {
+        let bd;
+        if (t.method === "MERCADOPAGO") bd = (await getPayment(t.providerRef!))?.breakdown;
+        else if (t.method === "PAYPAL") bd = await getOrderBreakdown(t.providerRef!);
+        if (bd) await db.topUp.update({ where: { id: t.id }, data: bd });
+      } catch {}
+    }
+
+    const rows = await db.topUp.findMany({
+      orderBy: { createdAt: "desc" },
+      take: 300,
+      include: { user: { select: { email: true, nickname: true } } },
+    });
+    const purchases = rows.map((t) => {
+      const feePct = t.grossAmount ? (t.feeAmount ?? 0) / t.grossAmount : null;
+      const feeUsd = feePct != null ? Math.round(t.amountUsd * feePct) : null;
+      const netUsd = feeUsd != null ? t.amountUsd - feeUsd : null;
+      return {
+        id: t.id, createdAt: t.createdAt, confirmedAt: t.confirmedAt, status: t.status,
+        method: t.method, user: t.user, amountUsd: t.amountUsd, lingotes: t.lingotes,
+        chargeCurrency: t.chargeCurrency, grossAmount: t.grossAmount, feeAmount: t.feeAmount,
+        netAmount: t.netAmount, feePct, feeUsd, netUsd,
+      };
+    });
+    const paid = purchases.filter((p) => p.status === "PAID");
+    const withFee = paid.filter((p) => p.feeUsd != null);
+    const grossUsd = paid.reduce((s, p) => s + p.amountUsd, 0);
+    const feeUsd = withFee.reduce((s, p) => s + (p.feeUsd ?? 0), 0);
+    const avgFeePct = withFee.length ? withFee.reduce((s, p) => s + (p.feePct ?? 0), 0) / withFee.length : null;
+    return {
+      purchases,
+      totals: {
+        count: paid.length,
+        lingotes: paid.reduce((s, p) => s + p.lingotes, 0),
+        grossUsd,
+        feeUsd,
+        netUsd: grossUsd - feeUsd,
+        avgFeePct,
+        missingFee: paid.length - withFee.length,
       },
     };
   })

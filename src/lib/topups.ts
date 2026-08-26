@@ -6,9 +6,16 @@ import { sendEmail, topupApprovedEmail } from "./email";
  * Credit a topup's lingotes exactly once (idempotent). Returns true if it
  * credited now. Used by the MP webhook, the PayPal return, and reconciliation.
  */
+export interface FeeBreakdown {
+  chargeCurrency: string;
+  grossAmount: number;
+  feeAmount: number;
+  netAmount: number;
+}
+
 export async function creditTopupIfPending(
   topupId: string,
-  opts: { providerRef?: string; memoLabel: string },
+  opts: { providerRef?: string; memoLabel: string; breakdown?: FeeBreakdown },
 ): Promise<boolean> {
   let credited = false;
   await db.$transaction(async (tx) => {
@@ -24,7 +31,12 @@ export async function creditTopupIfPending(
     });
     await tx.topUp.update({
       where: { id: topup.id },
-      data: { status: "PAID", confirmedAt: new Date(), providerRef: opts.providerRef ?? topup.providerRef },
+      data: {
+        status: "PAID",
+        confirmedAt: new Date(),
+        providerRef: opts.providerRef ?? topup.providerRef,
+        ...(opts.breakdown ?? {}),
+      },
     });
     credited = true;
   });

@@ -15,7 +15,7 @@ export const mp = new Elysia({ name: "mp" })
       // Confirm the real payment status with MercadoPago (don't trust the ping).
       const payment = await getPayment(String(paymentId));
       if (payment?.status === "approved" && payment.external_reference) {
-        await creditTopupIfPending(payment.external_reference, { providerRef: String(paymentId), memoLabel: "Recarga MercadoPago" });
+        await creditTopupIfPending(payment.external_reference, { providerRef: String(paymentId), memoLabel: "Recarga MercadoPago", breakdown: payment.breakdown });
       }
       set.status = 200;
       return { ok: true, status: payment?.status ?? "unknown" };
