@@ -8,6 +8,14 @@ import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypa
 import { sendEmail, purchaseEmail } from "../lib/email";
 import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
 import { publishSold } from "../lib/liveRaffles";
+import { logActivity } from "../lib/activity";
+
+// Handles that collide with routes/brand and can't be taken as usernames.
+const RESERVED_USERNAMES = new Set([
+  "admin", "api", "u", "sorteos", "sorteo", "ganadores", "recargar", "cuenta",
+  "entrar", "registro", "verificar", "como-funciona", "legal", "support",
+  "soporte", "qori", "null", "undefined", "live", "me", "www", "app",
+]);
 
 /** 1 USD = 10 lingotes (fixed). */
 const LINGOTES_PER_USD = 10;
@@ -32,20 +40,39 @@ export const me = new Elysia({ name: "me" })
     "/me/profile",
     async ({ user, body, set }) => {
       if (!requireUser(user, set)) return { error: "unauthenticated" };
-      const updated = await db.user.update({
-        where: { id: user.id },
-        data: {
-          nickname: body.nickname ?? undefined,
-          avatarUrl: body.avatarUrl ?? undefined,
-          phone: body.phone ?? undefined,
-          country: body.country ?? undefined,
-        },
-      });
+      const data: any = {};
+      if (body.nickname !== undefined) data.nickname = body.nickname;
+      if (body.phone !== undefined) data.phone = body.phone;
+      if (body.country !== undefined) data.country = body.country;
+
+      // Username handle: validate, unique, changeable once per 15 days.
+      if (body.username !== undefined && body.username.toLowerCase() !== (user.username ?? "")) {
+        const uname = body.username.trim().toLowerCase();
+        if (!/^[a-z0-9_]{3,20}$/.test(uname)) { set.status = 422; return { error: "username_invalid" }; }
+        if (RESERVED_USERNAMES.has(uname)) { set.status = 422; return { error: "username_reserved" }; }
+        if (user.usernameChangedAt) {
+          const days = (Date.now() - new Date(user.usernameChangedAt).getTime()) / 86400000;
+          if (days < 15) { set.status = 429; return { error: "username_cooldown", daysLeft: Math.ceil(15 - days) }; }
+        }
+        const taken = await db.user.findUnique({ where: { username: uname } });
+        if (taken && taken.id !== user.id) { set.status = 409; return { error: "username_taken" }; }
+        data.username = uname;
+        data.usernameChangedAt = new Date();
+      }
+
+      // Avatar change (from URL field) is logged old -> new.
+      const avatarChanged = body.avatarUrl !== undefined && body.avatarUrl !== user.avatarUrl;
+      if (body.avatarUrl !== undefined) data.avatarUrl = body.avatarUrl;
+
+      const updated = await db.user.update({ where: { id: user.id }, data });
+      if (data.username) await logActivity(user.id, "username_change", { from: user.username ?? null, to: data.username });
+      if (avatarChanged) await logActivity(user.id, "avatar_change", { to: updated.avatarUrl });
       return { user: publicUser(updated) };
     },
     {
       body: t.Object({
         nickname: t.Optional(t.String({ maxLength: 40 })),
+        username: t.Optional(t.String({ maxLength: 20 })),
         avatarUrl: t.Optional(t.String({ maxLength: 500 })),
         phone: t.Optional(t.String({ maxLength: 30 })),
         country: t.Optional(t.String({ minLength: 2, maxLength: 2 })),
@@ -67,6 +94,7 @@ export const me = new Elysia({ name: "me" })
         const key = `avatars/${user.id}/${crypto.randomUUID()}.${ext}`;
         const url = await uploadObject(key, await file.arrayBuffer(), file.type);
         const updated = await db.user.update({ where: { id: user.id }, data: { avatarUrl: url } });
+        await logActivity(user.id, "avatar_change", { to: url });
         return { url, user: publicUser(updated) };
       } catch (e) {
         set.status = 502;
@@ -75,6 +103,39 @@ export const me = new Elysia({ name: "me" })
     },
     { body: t.Object({ file: t.File() }) },
   )
+
+  // --- Public profile (view-only, money censored) ---
+  // Returns a user's public handle + a transparency feed: which raffles they
+  // bought tickets in (raffle, quantity, date) and profile changes (username /
+  // avatar). No balances, amounts, email or edit options are ever exposed here.
+  .get("/u/:username", async ({ params, set }) => {
+    const u = await db.user.findUnique({ where: { username: params.username.toLowerCase() } });
+    if (!u) { set.status = 404; return { error: "not_found" }; }
+    const [ticketsTotal, winsCount, orders, activities] = await Promise.all([
+      db.ticket.count({ where: { ownerId: u.id } }),
+      db.winner.count({ where: { userId: u.id } }),
+      db.order.findMany({
+        where: { userId: u.id, status: "CONFIRMED" },
+        include: { raffle: { select: { slug: true, title: true, images: true } } },
+        orderBy: { createdAt: "desc" }, take: 60,
+      }),
+      db.activity.findMany({ where: { userId: u.id }, orderBy: { createdAt: "desc" }, take: 60 }),
+    ]);
+    const feed = [
+      ...orders.map((o) => ({
+        type: "purchase" as const, at: o.createdAt, quantity: o.quantity,
+        raffle: { slug: o.raffle.slug, title: o.raffle.title, image: o.raffle.images?.[0] ?? null },
+      })),
+      ...activities.map((a) => ({ type: a.type as string, at: a.createdAt, data: a.data as any })),
+    ].sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime()).slice(0, 80);
+    return {
+      profile: {
+        username: u.username, nickname: u.nickname, avatarUrl: u.avatarUrl,
+        country: u.country, createdAt: u.createdAt, ticketsTotal, winsCount,
+      },
+      feed,
+    };
+  })
 
   // --- Wallet: ledger history + balance ---
   .get("/me/wallet", async ({ user, set }) => {

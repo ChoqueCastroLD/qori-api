@@ -35,6 +35,8 @@ export function publicUser(u: User) {
     email: u.email,
     name: u.name,
     nickname: u.nickname,
+    username: u.username,
+    usernameChangedAt: u.usernameChangedAt,
     avatarUrl: u.avatarUrl,
     country: u.country,
     role: u.role,

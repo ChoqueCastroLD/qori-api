@@ -48,6 +48,10 @@ model User {
   canBuy      Boolean @default(true)
   buyAttempts Int     @default(0) // every buy attempt (success or fail)
 
+  // Public handle for the /u/:username profile URL. Changeable once / 15 days.
+  username          String?   @unique
+  usernameChangedAt DateTime?
+
   // Referral graph.
   referralCode     String  @unique
   referredBy       User?   @relation("Referrals", fields: [referredById], references: [id])
@@ -68,8 +72,22 @@ model User {
   referrals      User[]         @relation("Referrals")
   confirmedTopups TopUp[]       @relation("TopUpConfirmedBy")
   chatMessages   ChatMessage[]
+  activities     Activity[]
 
   @@index([referredById])
+}
+
+// Public activity log for the profile feed (transparency): profile changes and
+// anything else worth showing. Ticket purchases come from Order, not here.
+model Activity {
+  id        String   @id @default(cuid())
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  userId    String
+  type      String // "username_change" | "avatar_change"
+  data      Json // { from, to } / { to }
+  createdAt DateTime @default(now())
+
+  @@index([userId, createdAt])
 }
 
 model OAuthAccount {
