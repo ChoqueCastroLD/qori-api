@@ -86,7 +86,9 @@ const app = new Elysia({ prefix: "/api" })
       return cached;
     }
     const raffles = await db.raffle.findMany({
-      where: { status: { in: ["OPEN", "CLOSED", "DRAWING", "DRAWN"] }, blocked: false },
+      // Blocked raffles stay visible (marked "no disponible"); they just can't
+      // sell tickets and are skipped by the scheduler.
+      where: { status: { in: ["OPEN", "CLOSED", "DRAWING", "DRAWN"] } },
       orderBy: [{ status: "asc" }, { closesAt: "asc" }, { createdAt: "desc" }],
       include: {
         _count: { select: { tickets: true } },
