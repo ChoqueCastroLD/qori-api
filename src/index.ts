@@ -65,6 +65,14 @@ const app = new Elysia({ prefix: "/api" })
   .use(paypal)
   .get("/health", () => ({ ok: true, service: "qori-api" }))
 
+  // WebSocket: live ticket counts. Clients update any [data-live-sold="<slug>"]
+  // element when anyone buys. (Own path to avoid the /raffles/:slug collision;
+  // SSE was buffered by the proxy chain.)
+  .ws("/live", {
+    open(ws) { addSocket(ws); },
+    close(ws) { removeSocket(ws); },
+  })
+
   // Live USD exchange rates (indicative display only).
   .get("/fx", () => getRates())
 
@@ -97,13 +105,6 @@ const app = new Elysia({ prefix: "/api" })
     setRafflesCache(data);
     set.headers["cache-control"] = "public, max-age=8";
     return data;
-  })
-
-  // WebSocket: live ticket counts. Clients update any [data-live-sold="<slug>"]
-  // element on the page when anyone buys (SSE was buffered by the proxy chain).
-  .ws("/raffles/live", {
-    open(ws) { addSocket(ws); },
-    close(ws) { removeSocket(ws); },
   })
 
   .get("/raffles/:slug", async ({ params, set }) => {
