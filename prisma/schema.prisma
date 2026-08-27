@@ -232,6 +232,12 @@ model Raffle {
   extensionCount Int       @default(0) // +24h auto-extensions applied
   extensions     Json?     // log of each postponement [{at, ticketCount, minTickets, from, to}]
 
+  // Admin block switch: hides the raffle from the public + freezes it (no sales,
+  // no auto-draw) while blocked. Reason + full on/off log for the history.
+  blocked      Boolean @default(false)
+  blockReason  String?
+  blockHistory Json?   // [{ at, action: "block"|"unblock", reason }]
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 

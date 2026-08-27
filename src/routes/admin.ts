@@ -136,6 +136,34 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     return { ok: true, refundedOrders };
   })
 
+  // Block / unblock a raffle (with reason). Blocked raffles are hidden from the
+  // public, can't sell tickets, and are skipped by the scheduler. Every toggle
+  // is appended to blockHistory for the record.
+  .post(
+    "/raffles/:id/block",
+    async ({ params, body, set }) => {
+      const raffle = await db.raffle.findUnique({ where: { id: params.id } });
+      if (!raffle) {
+        set.status = 404;
+        return { error: "not_found" };
+      }
+      const blocked = !!body.blocked;
+      const reason = (body.reason ?? "").trim() || null;
+      if (blocked && !reason) {
+        set.status = 422;
+        return { error: "reason_required" };
+      }
+      const prev = Array.isArray(raffle.blockHistory) ? (raffle.blockHistory as any[]) : [];
+      const entry = { at: new Date().toISOString(), action: blocked ? "block" : "unblock", reason };
+      const updated = await db.raffle.update({
+        where: { id: params.id },
+        data: { blocked, blockReason: blocked ? reason : null, blockHistory: [...prev, entry] as any },
+      });
+      return { ok: true, blocked: updated.blocked, blockReason: updated.blockReason };
+    },
+    { body: t.Object({ blocked: t.Boolean(), reason: t.Optional(t.String()) }) },
+  )
+
   // Edit a raffle. Only the fields sent are updated. Lets the admin set an exact
   // draw date/time (closesAt) or adjust limits after creation. A DRAWN or
   // CANCELLED raffle is locked (its outcome is already published).

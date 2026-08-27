@@ -42,6 +42,8 @@ function publicRaffle(r: any) {
     drawnAt: r.drawnAt,
     extensionCount: r.extensionCount,
     extensions: r.extensions ?? [],
+    blocked: r.blocked ?? false,
+    blockReason: r.blockReason ?? null,
     ticketsSold: r._count?.tickets ?? undefined,
     fairness: {
       commitment: r.commitment,
@@ -78,7 +80,7 @@ const app = new Elysia({ prefix: "/api" })
       return rafflesCache.data;
     }
     const raffles = await db.raffle.findMany({
-      where: { status: { in: ["OPEN", "CLOSED", "DRAWING", "DRAWN"] } },
+      where: { status: { in: ["OPEN", "CLOSED", "DRAWING", "DRAWN"] }, blocked: false },
       orderBy: [{ status: "asc" }, { closesAt: "asc" }, { createdAt: "desc" }],
       include: {
         _count: { select: { tickets: true } },

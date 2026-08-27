@@ -139,6 +139,7 @@ export const me = new Elysia({ name: "me" })
           // Lock the raffle row to serialize ticket assignment per raffle.
           const raffle = await tx.raffle.findUnique({ where: { slug: params.slug } });
           if (!raffle) throw new Error("raffle_not_found");
+          if (raffle.blocked) throw new Error("raffle_blocked");
           if (raffle.status !== "OPEN") throw new Error("raffle_not_open");
           await tx.raffle.update({ where: { id: raffle.id }, data: { updatedAt: new Date() } });
 

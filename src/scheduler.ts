@@ -33,7 +33,7 @@ async function reconcileTopups() {
 
 async function tick() {
   const now = new Date();
-  const due = await db.raffle.findMany({ where: { status: "OPEN", closesAt: { lte: now } } });
+  const due = await db.raffle.findMany({ where: { status: "OPEN", blocked: false, closesAt: { lte: now } } });
   for (const r of due) {
     try {
       const count = await db.ticket.count({ where: { raffleId: r.id } });
@@ -69,7 +69,7 @@ async function tick() {
 async function notifyClosingSoon() {
   const now = Date.now();
   const soon = await db.raffle.findMany({
-    where: { status: "OPEN", closesAt: { gt: new Date(now), lte: new Date(now + 60 * 60 * 1000) } },
+    where: { status: "OPEN", blocked: false, closesAt: { gt: new Date(now), lte: new Date(now + 60 * 60 * 1000) } },
   });
   for (const r of soon) {
     await notifyOnce(r.id, "closing-1h", async () => {
