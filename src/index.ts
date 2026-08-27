@@ -4,7 +4,7 @@ import { hmacSha256Hex, sha256Hex, verifyDraw } from "./fair";
 import { generateShow, type GameType } from "./show";
 import { db } from "./db";
 import { getRafflesCache, setRafflesCache } from "./lib/rafflesCache";
-import { subscribeRaffles } from "./lib/liveRaffles";
+import { addSocket, removeSocket } from "./lib/liveRaffles";
 import { auth } from "./routes/auth";
 import { me } from "./routes/me";
 import { admin } from "./routes/admin";
@@ -99,29 +99,11 @@ const app = new Elysia({ prefix: "/api" })
     return data;
   })
 
-  // Server-Sent Events: live ticket counts for every raffle (one stream/client).
-  // Clients update any [data-live-sold="<slug>"] element on the page.
-  .get("/raffles/live", () => {
-    let unsub = () => {};
-    let hb: ReturnType<typeof setInterval>;
-    const stream = new ReadableStream({
-      start(controller) {
-        const enc = new TextEncoder();
-        const send = (s: string) => { try { controller.enqueue(enc.encode(s)); } catch {} };
-        send(": ok\n\n");
-        unsub = subscribeRaffles((p) => send(`data: ${p}\n\n`));
-        hb = setInterval(() => send(": hb\n\n"), 20000);
-      },
-      cancel() { clearInterval(hb); unsub(); },
-    });
-    return new Response(stream, {
-      headers: {
-        "content-type": "text/event-stream",
-        "cache-control": "no-cache, no-transform",
-        "x-accel-buffering": "no",
-        connection: "keep-alive",
-      },
-    });
+  // WebSocket: live ticket counts. Clients update any [data-live-sold="<slug>"]
+  // element on the page when anyone buys (SSE was buffered by the proxy chain).
+  .ws("/raffles/live", {
+    open(ws) { addSocket(ws); },
+    close(ws) { removeSocket(ws); },
   })
 
   .get("/raffles/:slug", async ({ params, set }) => {
