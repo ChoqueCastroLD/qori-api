@@ -43,6 +43,11 @@ model User {
   // LedgerEntry — the ledger is the source of truth; this is a fast read.
   balance Int @default(0)
 
+  // Admin moderation switches + light activity counter.
+  canChat     Boolean @default(true)
+  canBuy      Boolean @default(true)
+  buyAttempts Int     @default(0) // every buy attempt (success or fail)
+
   // Referral graph.
   referralCode     String  @unique
   referredBy       User?   @relation("Referrals", fields: [referredById], references: [id])

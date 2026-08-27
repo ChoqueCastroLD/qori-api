@@ -6,6 +6,7 @@ import { executeDraw, refundRaffle } from "../lib/draw";
 import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
 import { getPayment } from "../lib/mercadopago";
 import { getOrderBreakdown } from "../lib/paypal";
+import { bustRafflesCache } from "../lib/rafflesCache";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
@@ -58,6 +59,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
           closesAt: body.closesAt ? new Date(body.closesAt) : null,
         },
       });
+      bustRafflesCache();
       return { id: raffle.id, slug: raffle.slug, commitment };
     },
     {
@@ -122,6 +124,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       set.status = 409;
       return { error: "already_claimed" };
     }
+    bustRafflesCache();
     return { ok: true, ...result };
   })
 
@@ -133,6 +136,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       return { error: "not_found" };
     }
     const refundedOrders = await refundRaffle(raffle.id);
+    bustRafflesCache();
     return { ok: true, refundedOrders };
   })
 
@@ -159,6 +163,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         where: { id: params.id },
         data: { blocked, blockReason: blocked ? reason : null, blockHistory: [...prev, entry] as any },
       });
+      bustRafflesCache();
       return { ok: true, blocked: updated.blocked, blockReason: updated.blockReason };
     },
     { body: t.Object({ blocked: t.Boolean(), reason: t.Optional(t.String()) }) },
@@ -194,6 +199,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       if (body.status !== undefined) data.status = body.status as any;
       if (body.closesAt !== undefined) data.closesAt = body.closesAt ? new Date(body.closesAt) : null;
       const updated = await db.raffle.update({ where: { id: params.id }, data });
+      bustRafflesCache();
       return { ok: true, id: updated.id, closesAt: updated.closesAt };
     },
     {
@@ -378,6 +384,58 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       },
     };
   })
+
+  // Users list with activity + moderation flags (aggregated in a few queries).
+  .get("/users", async () => {
+    const users = await db.user.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
+    const [ticketsBy, ordersBy, refsBy, paidTopups] = await Promise.all([
+      db.ticket.groupBy({ by: ["ownerId"], where: { ownerId: { not: null } }, _count: { _all: true } }),
+      db.order.groupBy({ by: ["userId"], where: { status: "CONFIRMED" }, _count: { _all: true }, _sum: { costLingotes: true } }),
+      db.user.groupBy({ by: ["referredById"], where: { referredById: { not: null } }, _count: { _all: true } }),
+      db.topUp.findMany({ where: { status: "PAID" }, select: { userId: true, amountUsd: true, method: true } }),
+    ]);
+    const tMap = new Map(ticketsBy.map((t) => [t.ownerId, t._count._all]));
+    const oMap = new Map(ordersBy.map((o) => [o.userId, o]));
+    const rMap = new Map(refsBy.map((r) => [r.referredById, r._count._all]));
+    const topMap = new Map<string, { count: number; usd: number; methods: Set<string> }>();
+    for (const t of paidTopups) {
+      let e = topMap.get(t.userId);
+      if (!e) { e = { count: 0, usd: 0, methods: new Set() }; topMap.set(t.userId, e); }
+      e.count++; e.usd += t.amountUsd; e.methods.add(t.method);
+    }
+    return users.map((u) => {
+      const top = topMap.get(u.id);
+      const ord = oMap.get(u.id);
+      return {
+        id: u.id, email: u.email, nickname: u.nickname, avatarUrl: u.avatarUrl,
+        country: u.country, role: u.role, emailVerified: !!u.emailVerified, createdAt: u.createdAt,
+        balance: u.balance, canChat: u.canChat, canBuy: u.canBuy, buyAttempts: u.buyAttempts,
+        referralCode: u.referralCode,
+        ticketsOwned: tMap.get(u.id) ?? 0,
+        orders: ord?._count._all ?? 0,
+        lingotesSpent: ord?._sum.costLingotes ?? 0,
+        referralsCount: rMap.get(u.id) ?? 0,
+        topupCount: top?.count ?? 0,
+        spentUsd: top?.usd ?? 0,
+        methods: top ? [...top.methods] : [],
+      };
+    });
+  })
+
+  // Toggle a user's moderation switches (chat / buy).
+  .post(
+    "/users/:id/flags",
+    async ({ params, body, set }) => {
+      const data: any = {};
+      if (body.canChat !== undefined) data.canChat = body.canChat;
+      if (body.canBuy !== undefined) data.canBuy = body.canBuy;
+      if (Object.keys(data).length === 0) { set.status = 422; return { error: "no_fields" }; }
+      const u = await db.user.update({ where: { id: params.id }, data }).catch(() => null);
+      if (!u) { set.status = 404; return { error: "not_found" }; }
+      return { ok: true, canChat: u.canChat, canBuy: u.canBuy };
+    },
+    { body: t.Object({ canChat: t.Optional(t.Boolean()), canBuy: t.Optional(t.Boolean()) }) },
+  )
 
   // Read-only topups view (all recharges are automatic via MP/PayPal now; no
   // manual approval — that could credit unconfirmed payments).

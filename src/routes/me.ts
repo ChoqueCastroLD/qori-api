@@ -7,6 +7,7 @@ import { createPreference, mpConfigured } from "../lib/mercadopago";
 import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypal";
 import { sendEmail, purchaseEmail } from "../lib/email";
 import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
+import { publishSold } from "../lib/liveRaffles";
 
 /** 1 USD = 10 lingotes (fixed). */
 const LINGOTES_PER_USD = 10;
@@ -134,6 +135,10 @@ export const me = new Elysia({ name: "me" })
       if (!requireUser(user, set)) return { error: "unauthenticated" };
       const quantity = body.quantity;
 
+      // Count every attempt (even failures) for admin visibility.
+      void db.user.update({ where: { id: user.id }, data: { buyAttempts: { increment: 1 } } }).catch(() => {});
+      if (user.canBuy === false) { set.status = 403; return { error: "buy_disabled" }; }
+
       try {
         const result = await db.$transaction(async (tx) => {
           // Lock the raffle row to serialize ticket assignment per raffle.
@@ -225,8 +230,11 @@ export const me = new Elysia({ name: "me" })
             await tx.user.update({ where: { id: user.id }, data: { referralRewarded: true } });
           }
 
-          return { orderId: order.id, numbers: chosen.sort((a, b) => a - b), raffleTitle: raffle.title, slug: raffle.slug };
+          return { orderId: order.id, numbers: chosen.sort((a, b) => a - b), raffleTitle: raffle.title, slug: raffle.slug, sold: sold + quantity, total: raffle.totalTickets };
         });
+
+        // Broadcast the new sold count to everyone watching this raffle (live).
+        publishSold(result.slug, result.sold, result.total);
 
         // Purchase confirmation email (non-blocking).
         if (user.email) {
@@ -243,6 +251,8 @@ export const me = new Elysia({ name: "me" })
         const known = [
           "raffle_not_found",
           "raffle_not_open",
+          "raffle_blocked",
+          "buy_disabled",
           "sold_out",
           "per_user_limit",
           "could_not_assign",

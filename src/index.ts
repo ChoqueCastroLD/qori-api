@@ -3,6 +3,8 @@ import { cors } from "@elysiajs/cors";
 import { hmacSha256Hex, sha256Hex, verifyDraw } from "./fair";
 import { generateShow, type GameType } from "./show";
 import { db } from "./db";
+import { getRafflesCache, setRafflesCache } from "./lib/rafflesCache";
+import { subscribeRaffles } from "./lib/liveRaffles";
 import { auth } from "./routes/auth";
 import { me } from "./routes/me";
 import { admin } from "./routes/admin";
@@ -16,10 +18,6 @@ const PORT = Number(process.env.PORT ?? 3000);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:4321";
 
 /** Public-safe view of a raffle: never leaks an unrevealed serverSeed. */
-// Short-lived cache for the public raffles list (see GET /raffles).
-const RAFFLES_TTL_MS = 8000;
-let rafflesCache: { at: number; data: any } | null = null;
-
 function publicRaffle(r: any) {
   return {
     id: r.id,
@@ -74,10 +72,10 @@ const app = new Elysia({ prefix: "/api" })
   // Short in-memory cache: this list feeds home/sorteos/ganadores/recargar SSR,
   // so a few seconds of staleness on ticket counts is fine and cuts TTFB.
   .get("/raffles", async ({ set }) => {
-    const now = Date.now();
-    if (rafflesCache && now - rafflesCache.at < RAFFLES_TTL_MS) {
+    const cached = getRafflesCache();
+    if (cached) {
       set.headers["cache-control"] = "public, max-age=8";
-      return rafflesCache.data;
+      return cached;
     }
     const raffles = await db.raffle.findMany({
       where: { status: { in: ["OPEN", "CLOSED", "DRAWING", "DRAWN"] }, blocked: false },
@@ -96,9 +94,34 @@ const app = new Elysia({ prefix: "/api" })
         avatarUrl: w.user?.avatarUrl ?? null,
       })),
     }));
-    rafflesCache = { at: now, data };
+    setRafflesCache(data);
     set.headers["cache-control"] = "public, max-age=8";
     return data;
+  })
+
+  // Server-Sent Events: live ticket counts for every raffle (one stream/client).
+  // Clients update any [data-live-sold="<slug>"] element on the page.
+  .get("/raffles/live", () => {
+    let unsub = () => {};
+    let hb: ReturnType<typeof setInterval>;
+    const stream = new ReadableStream({
+      start(controller) {
+        const enc = new TextEncoder();
+        const send = (s: string) => { try { controller.enqueue(enc.encode(s)); } catch {} };
+        send(": ok\n\n");
+        unsub = subscribeRaffles((p) => send(`data: ${p}\n\n`));
+        hb = setInterval(() => send(": hb\n\n"), 20000);
+      },
+      cancel() { clearInterval(hb); unsub(); },
+    });
+    return new Response(stream, {
+      headers: {
+        "content-type": "text/event-stream",
+        "cache-control": "no-cache, no-transform",
+        "x-accel-buffering": "no",
+        connection: "keep-alive",
+      },
+    });
   })
 
   .get("/raffles/:slug", async ({ params, set }) => {

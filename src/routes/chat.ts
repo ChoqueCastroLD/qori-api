@@ -28,6 +28,10 @@ export const chat = new Elysia({ name: "chat" })
         set.status = 401;
         return { error: "unauthenticated" };
       }
+      if (user.canChat === false) {
+        set.status = 403;
+        return { error: "chat_disabled" };
+      }
       const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true } });
       if (!raffle) {
         set.status = 404;
