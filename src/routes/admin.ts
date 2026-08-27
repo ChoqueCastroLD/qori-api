@@ -180,24 +180,30 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         set.status = 404;
         return { error: "not_found" };
       }
-      if (raffle.status === "DRAWN" || raffle.status === "CANCELLED") {
+      // Finished/cancelled raffles are locked EXCEPT legacy (historical) ones,
+      // which stay editable for cosmetics only (title/description/images).
+      const finished = raffle.status === "DRAWN" || raffle.status === "CANCELLED";
+      if (finished && !raffle.legacy) {
         set.status = 409;
         return { error: "locked", status: raffle.status };
       }
+      const cosmeticOnly = raffle.legacy;
       const data: any = {};
       if (body.title !== undefined) data.title = body.title;
       if (body.description !== undefined) data.description = body.description;
       if (body.images !== undefined) data.images = body.images;
-      if (body.prizeValue !== undefined) data.prizeValue = body.prizeValue;
-      if (body.ticketPrice !== undefined) data.ticketPrice = body.ticketPrice;
-      if (body.totalTickets !== undefined) data.totalTickets = body.totalTickets;
-      if (body.minTickets !== undefined) data.minTickets = body.minTickets;
-      if (body.maxTicketsPerUser !== undefined) data.maxTicketsPerUser = body.maxTicketsPerUser;
-      if (body.winnersCount !== undefined) data.winnersCount = body.winnersCount;
-      if (body.games !== undefined) data.games = body.games as any;
-      if (body.finale !== undefined) data.finale = (body.finale || null) as any;
-      if (body.status !== undefined) data.status = body.status as any;
-      if (body.closesAt !== undefined) data.closesAt = body.closesAt ? new Date(body.closesAt) : null;
+      if (!cosmeticOnly) {
+        if (body.prizeValue !== undefined) data.prizeValue = body.prizeValue;
+        if (body.ticketPrice !== undefined) data.ticketPrice = body.ticketPrice;
+        if (body.totalTickets !== undefined) data.totalTickets = body.totalTickets;
+        if (body.minTickets !== undefined) data.minTickets = body.minTickets;
+        if (body.maxTicketsPerUser !== undefined) data.maxTicketsPerUser = body.maxTicketsPerUser;
+        if (body.winnersCount !== undefined) data.winnersCount = body.winnersCount;
+        if (body.games !== undefined) data.games = body.games as any;
+        if (body.finale !== undefined) data.finale = (body.finale || null) as any;
+        if (body.status !== undefined) data.status = body.status as any;
+        if (body.closesAt !== undefined) data.closesAt = body.closesAt ? new Date(body.closesAt) : null;
+      }
       const updated = await db.raffle.update({ where: { id: params.id }, data });
       bustRafflesCache();
       return { ok: true, id: updated.id, closesAt: updated.closesAt };
