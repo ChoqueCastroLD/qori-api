@@ -132,6 +132,25 @@ const app = new Elysia({ prefix: "/api" })
     };
   })
 
+  // Public participants: who's in, with their ticket count (no money). Shown on
+  // the raffle page for transparency; links to /u/:username.
+  .get("/raffles/:slug/participants", async ({ params, set }) => {
+    const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true } });
+    if (!raffle) { set.status = 404; return { error: "not_found" }; }
+    const tickets = await db.ticket.findMany({
+      where: { raffleId: raffle.id, ownerId: { not: null } },
+      select: { ownerId: true, owner: { select: { username: true, nickname: true, avatarUrl: true } } },
+    });
+    const byUser = new Map<string, { username: string | null; nickname: string | null; avatarUrl: string | null; tickets: number }>();
+    for (const t of tickets) {
+      let e = byUser.get(t.ownerId!);
+      if (!e) { e = { username: t.owner?.username ?? null, nickname: t.owner?.nickname ?? null, avatarUrl: t.owner?.avatarUrl ?? null, tickets: 0 }; byUser.set(t.ownerId!, e); }
+      e.tickets++;
+    }
+    const participants = [...byUser.values()].sort((a, b) => b.tickets - a.tickets);
+    return { count: participants.length, totalTickets: tickets.length, participants };
+  })
+
   // The generated live show + canonical participants (for animation + replay).
   .get("/raffles/:slug/show", async ({ params, set }) => {
     const raffle = await db.raffle.findUnique({
