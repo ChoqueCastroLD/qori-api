@@ -2,8 +2,6 @@ import { db } from "../db";
 import { applyLedger } from "./wallet";
 import { hmacSha256Hex, sha256Hex } from "../fair";
 import { generateShow, type GameType } from "../show";
-import { drawLiveEmail } from "./email";
-import { participants, sendToAll } from "./notify";
 
 const DRAND_BASE = "https://api.drand.sh";
 
@@ -132,11 +130,9 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
     });
   });
 
-  // "EN VIVO ahora" to every participant (no spoiler). Winner + results emails
-  // are sent when the show ends, from the scheduler (sendResults).
-  void participants(raffleId)
-    .then((ps) => sendToAll(ps.map((p) => p.email), drawLiveEmail(raffle.title, raffle.slug)))
-    .catch(() => {});
+  // No email at draw time: it lands ~2 min late (useless). Participants are
+  // warned ~5 min before by the scheduler (startingSoonEmail); results emails
+  // go out when the show ends (sendResults).
 
   return {
     winners: winnerTickets.map((wt, i) => ({ position: i + 1, number: wt.number })),

@@ -122,6 +122,17 @@ export function closingSoonEmail(raffleTitle: string, slug: string): { subject: 
   };
 }
 
+export function startingSoonEmail(raffleTitle: string, slug: string): { subject: string; html: string } {
+  return {
+    subject: `Empieza en minutos: ${raffleTitle}`,
+    html: template({
+      heading: "Tu sorteo empieza en unos minutos",
+      body: `El sorteo de <strong>${raffleTitle}</strong> comienza muy pronto. Entra ahora y déjalo abierto: cuando arranque, el show se reproduce en vivo y sincronizado para todos.`,
+      cta: { label: "Ir al sorteo", url: `${WEB_ORIGIN}/sorteos/${slug}` },
+    }),
+  };
+}
+
 export function drawLiveEmail(raffleTitle: string, slug: string): { subject: string; html: string } {
   return {
     subject: `EN VIVO ahora: se sortea ${raffleTitle}`,

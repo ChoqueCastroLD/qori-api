@@ -4,7 +4,7 @@ import { captureOrder } from "./lib/paypal";
 import { searchApprovedPayment } from "./lib/mercadopago";
 import { creditTopupIfPending } from "./lib/topups";
 import { notifyOnce, participants, sendToAll, sendResults, sendPostponed } from "./lib/notify";
-import { closingSoonEmail } from "./lib/email";
+import { closingSoonEmail, startingSoonEmail } from "./lib/email";
 
 const MAX_EXTENSIONS = 5; // after this many +24h extensions, cancel + refund
 const EXTEND_MS = 24 * 60 * 60 * 1000;
@@ -62,7 +62,23 @@ async function tick() {
   }
   await reconcileTopups().catch((e) => console.error("⏰ reconcile error", e));
   await notifyClosingSoon().catch((e) => console.error("⏰ closing-soon error", e));
+  await notifyStartingSoon().catch((e) => console.error("⏰ starting-soon error", e));
   await notifyPendingResults().catch((e) => console.error("⏰ results error", e));
+}
+
+// "Empieza en minutos" ~5 min before the draw (email has ~2 min delay, so this
+// lands in time). Once per raffle.
+async function notifyStartingSoon() {
+  const now = Date.now();
+  const soon = await db.raffle.findMany({
+    where: { status: "OPEN", blocked: false, closesAt: { gt: new Date(now), lte: new Date(now + 5 * 60 * 1000) } },
+  });
+  for (const r of soon) {
+    await notifyOnce(r.id, "starting-5m", async () => {
+      const ps = await participants(r.id);
+      await sendToAll(ps.map((p) => p.email), startingSoonEmail(r.title, r.slug));
+    });
+  }
 }
 
 // "Se sortea pronto" to participants, ~1h before close (once per raffle).

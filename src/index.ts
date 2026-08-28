@@ -115,14 +115,28 @@ const app = new Elysia({ prefix: "/api" })
       include: {
         _count: { select: { tickets: true } },
         winners: { include: { ticket: true, user: true }, orderBy: { position: "asc" } },
+        show: true,
       },
     });
     if (!raffle || raffle.status === "DRAFT") {
       set.status = 404;
       return { error: "not_found" };
     }
+    // Live-show window: the animation plays from startsAt to startsAt+duration.
+    // Same timing as the client (STEP_MS 450 per elimination, GAP_MS 1400 between
+    // stages). Lets the page route people into the live show and avoid spoilers.
+    let show: { startsAt: string; endsAt: string } | null = null;
+    if (raffle.show?.startsAt && raffle.show.stages) {
+      const stages = (raffle.show.stages as any)?.stages ?? (raffle.show.stages as any) ?? [];
+      const dur = Array.isArray(stages)
+        ? stages.reduce((acc: number, s: any, i: number) => acc + (s.eliminated?.length ?? 0) * 450 + (i < stages.length - 1 ? 1400 : 0), 0)
+        : 0;
+      const startsAt = new Date(raffle.show.startsAt).getTime();
+      show = { startsAt: raffle.show.startsAt.toISOString(), endsAt: new Date(startsAt + dur + 2000).toISOString() };
+    }
     return {
       ...publicRaffle(raffle),
+      show,
       winners: raffle.winners.map((w) => ({
         position: w.position,
         ticketNumber: w.ticket.number,
