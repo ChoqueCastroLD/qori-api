@@ -11,7 +11,14 @@
  * stream; unpredictability comes from the digest being secret until reveal.
  */
 
-export type GameType = "ELIMINATION" | "DIGIT_REVEAL" | "BOMBS" | "SQUID" | "HORSE_RACE";
+export type GameType =
+  | "ELIMINATION"
+  | "DIGIT_REVEAL"
+  | "BOMBS"
+  | "SQUID"
+  | "HORSE_RACE"
+  | "ICE_FLOOR"
+  | "MUSICAL_CHAIRS";
 
 /** sfc32 seeded from 4x32-bit words taken from the digest hex. */
 export function makeRng(digestHex: string): () => number {
@@ -157,10 +164,41 @@ function buildGameData(
       return { rounds: rounds.slice(0, MAX_ANIM) };
     }
     case "HORSE_RACE": {
-      // Racers = alive tickets; losers "fall back", winners cross the line.
-      const lanes = aliveBefore.slice(0, 12);
+      // Racers: every eliminated ticket must be on track (so its fall is seen),
+      // plus survivors to contest the finish. Lane order is shuffled so the
+      // doomed aren't clustered. Capped to keep lanes readable.
+      const CAP = 14;
+      const survivors = aliveBefore.filter((i) => !eliminated.includes(i));
+      const elimLanes = eliminated.slice(0, Math.min(eliminated.length, CAP - Math.min(2, survivors.length)));
+      const survLanes = shuffle(rng, survivors).slice(0, CAP - elimLanes.length);
+      const lanes = shuffle(rng, [...elimLanes, ...survLanes]);
       const steps = 6 + randInt(rng, 4);
       return { lanes, steps, eliminated: eliminated.slice(0, MAX_ANIM) };
+    }
+    case "ICE_FLOOR": {
+      // Escalating waves of cracking ice; each wave drops a batch through.
+      const waves: number[][] = [];
+      const nWaves = Math.max(1, Math.min(4, Math.ceil(eliminated.length / 3)));
+      const size = Math.max(1, Math.ceil(eliminated.length / nWaves));
+      for (let i = 0; i < eliminated.length; i += size) waves.push(eliminated.slice(i, i + size));
+      return { waves: waves.slice(0, MAX_ANIM) };
+    }
+    case "MUSICAL_CHAIRS": {
+      // 2-3 rounds; each removes ~10% of those still circling (at least 1),
+      // so chairs = alive - max(1, round(0.10 * alive)). Remainder goes to the
+      // last round so the stage always eliminates exactly its chunk.
+      const rounds: number[][] = [];
+      let alive = aliveBefore.length;
+      let cur = 0;
+      const maxRounds = Math.min(3, Math.max(1, eliminated.length));
+      for (let r = 0; r < maxRounds && cur < eliminated.length; r++) {
+        const isLast = r === maxRounds - 1;
+        const k = isLast ? eliminated.length - cur : Math.min(eliminated.length - cur, Math.max(1, Math.round(alive * 0.1)));
+        rounds.push(eliminated.slice(cur, cur + k));
+        cur += k;
+        alive -= k;
+      }
+      return { rounds: rounds.slice(0, MAX_ANIM) };
     }
     case "DIGIT_REVEAL": {
       const digits = String(ticketCount).length;
