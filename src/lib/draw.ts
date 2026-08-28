@@ -2,6 +2,7 @@ import { db } from "../db";
 import { applyLedger } from "./wallet";
 import { hmacSha256Hex, sha256Hex } from "../fair";
 import { generateShow, type GameType } from "../show";
+import { publishDrawStart } from "./liveRaffles";
 
 const DRAND_BASE = "https://api.drand.sh";
 
@@ -129,6 +130,9 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
       create: { raffleId, stages: show as any, startsAt: new Date(), endsAt: null },
     });
   });
+
+  // Push everyone watching into the live show the instant it's ready.
+  publishDrawStart(raffle.slug);
 
   // No email at draw time: it lands ~2 min late (useless). Participants are
   // warned ~5 min before by the scheduler (startingSoonEmail); results emails

@@ -72,16 +72,29 @@ export async function sendResults(raffleId: string) {
   let i = 0;
   for (const st of show.stages ?? []) for (const idx of st.eliminated ?? []) posOf.set(idx, i++);
 
-  // Winners.
+  // Users who won with ANY ticket — they only get the winner email, never the
+  // "estuviste cerca" one (even if they also hold losing tickets).
+  const winnerUserIds = new Set<string>();
   for (const wi of show.winners ?? []) {
     const t = tickets[wi];
-    if (t?.owner?.email) await sendEmail({ to: t.owner.email, ...winnerEmail(raffle.title, t.number, raffle.slug) }).catch(() => {});
+    if (t?.ownerId) winnerUserIds.add(t.ownerId);
   }
 
-  // Non-winners: best (smallest) "lugares del ganar" per user.
+  // Winners: one email per winning USER (dedupe multi-ticket winners).
+  const emailedWinners = new Set<string>();
+  for (const wi of show.winners ?? []) {
+    const t = tickets[wi];
+    if (!t?.ownerId || !t.owner?.email || emailedWinners.has(t.ownerId)) continue;
+    emailedWinners.add(t.ownerId);
+    await sendEmail({ to: t.owner.email, ...winnerEmail(raffle.title, t.number, raffle.slug) }).catch(() => {});
+  }
+
+  // Non-winners: best (smallest) "lugares del ganar" per user. Skip anyone who
+  // won with another ticket.
   const best = new Map<string, { email: string; lugares: number }>();
   tickets.forEach((t, idx) => {
     if (winnerIdx.has(idx) || !t.ownerId || !t.owner?.email) return;
+    if (winnerUserIds.has(t.ownerId)) return; // won elsewhere → no "close" email
     const p = posOf.get(idx);
     if (p === undefined) return;
     const lugares = N - W - p; // last eliminated → 1

@@ -17,3 +17,11 @@ export function publishSold(slug: string, sold: number, total: number): void {
     try { ws.send(payload); } catch {}
   }
 }
+
+/** Broadcast that a raffle just started drawing → clients enter the live show. */
+export function publishDrawStart(slug: string): void {
+  const payload = JSON.stringify({ slug, draw: true });
+  for (const ws of sockets) {
+    try { ws.send(payload); } catch {}
+  }
+}
