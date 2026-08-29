@@ -217,6 +217,8 @@ enum GameType {
   BOMBS // tickets blown up in phases
   SQUID // red-light / green-light
   HORSE_RACE // tickets advance steps to the finish
+  ICE_FLOOR // chessboard of ice tiles crack in waves until doomed tickets fall through
+  MUSICAL_CHAIRS // tickets circle a ring of chairs; losers left without a seat
 }
 
 model Raffle {
