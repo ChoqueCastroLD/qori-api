@@ -219,6 +219,8 @@ enum GameType {
   HORSE_RACE // tickets advance steps to the finish
   ICE_FLOOR // chessboard of ice tiles crack in waves until doomed tickets fall through
   MUSICAL_CHAIRS // tickets circle a ring of chairs; losers left without a seat
+  ROCKETS // tickets orbit; wandering meteor strikes take out the nearest in waves
+  ROULETTE // russian-roulette finale: finalists in a ring, revolver fires until one remains
 }
 
 model Raffle {
@@ -241,6 +243,11 @@ model Raffle {
   // time; the flashiest game (finale) is placed last.
   games  GameType[]
   finale GameType?
+  // Show algorithm version. null/1 = legacy (shuffle winners, per-stage chunks).
+  // 2 = per-game deterministic sims (rockets/bombs/ruleta); winners = survivors.
+  // Stamped at draw time so already-drawn raffles always re-verify with the
+  // exact algorithm that produced them.
+  showVersion Int?
 
   // --- Provably-fair audit trail (see docs/FAIRNESS.md) ---
   commitment    String // sha256(serverSeed), published at OPEN

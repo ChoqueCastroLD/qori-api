@@ -1,7 +1,7 @@
 import { db } from "../db";
 import { applyLedger } from "./wallet";
 import { hmacSha256Hex, sha256Hex } from "../fair";
-import { generateShow, type GameType } from "../show";
+import { generateShow, generateShowV2, type GameType } from "../show";
 import { publishDrawStart } from "./liveRaffles";
 
 const DRAND_BASE = "https://api.drand.sh";
@@ -97,13 +97,16 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
   const publicEntropy = `${drand.round}:${drand.randomness}:${ticketsRoot}`;
   const digest = await hmacSha256Hex(raffle.serverSeed!, publicEntropy);
 
-  const show = generateShow({
+  const showOpts = {
     digest,
     ticketCount: tickets.length,
     winnersCount: raffle.winnersCount,
     games: (raffle.games as GameType[]) ?? ["ELIMINATION"],
     finale: (raffle.finale as GameType) ?? null,
-  });
+  };
+  // Version 2 = per-game deterministic sims (winners = survivors); legacy = v1.
+  const useV2 = raffle.showVersion === 2;
+  const show = useV2 ? generateShowV2(showOpts) : generateShow(showOpts);
   const winnerTickets = show.winners.map((idx) => tickets[idx]);
 
   await db.$transaction(async (tx) => {

@@ -1,7 +1,7 @@
 import { Elysia, t } from "elysia";
 import { cors } from "@elysiajs/cors";
 import { hmacSha256Hex, sha256Hex, verifyDraw } from "./fair";
-import { generateShow, type GameType } from "./show";
+import { generateShow, generateShowV2, type GameType } from "./show";
 import { db } from "./db";
 import { getRafflesCache, setRafflesCache } from "./lib/rafflesCache";
 import { addSocket, removeSocket } from "./lib/liveRaffles";
@@ -51,6 +51,7 @@ function publicRaffle(r: any) {
       drandValue: r.drandValue ?? null,
       ticketsRoot: r.ticketsRoot ?? null,
       drawDigest: r.drawDigest ?? null,
+      showVersion: r.showVersion ?? 1,
     },
   };
 }
@@ -218,13 +219,16 @@ const app = new Elysia({ prefix: "/api" })
     async ({ body }) => {
       const commitmentOk = (await sha256Hex(body.serverSeed)) === body.commitment;
       const digest = await hmacSha256Hex(body.serverSeed, body.publicEntropy);
-      const show = generateShow({
+      const opts = {
         digest,
         ticketCount: body.ticketCount,
         winnersCount: body.winnersCount,
         games: body.games as GameType[],
         finale: (body.finale as GameType) ?? null,
-      });
+      };
+      // Use the SAME algorithm version the raffle was drawn with, so historical
+      // draws always re-verify against the exact show they produced.
+      const show = body.showVersion === 2 ? generateShowV2(opts) : generateShow(opts);
       return {
         ok: commitmentOk,
         commitmentOk,
@@ -246,6 +250,7 @@ const app = new Elysia({ prefix: "/api" })
         winnersCount: t.Integer({ minimum: 1 }),
         games: t.Array(t.String()),
         finale: t.Optional(t.String()),
+        showVersion: t.Optional(t.Integer()),
       }),
     },
   )

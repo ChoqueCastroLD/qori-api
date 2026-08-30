@@ -1,0 +1,2 @@
+-- Add ROCKETS to the GameType enum
+ALTER TYPE "GameType" ADD VALUE IF NOT EXISTS 'ROCKETS';

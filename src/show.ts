@@ -18,7 +18,9 @@ export type GameType =
   | "SQUID"
   | "HORSE_RACE"
   | "ICE_FLOOR"
-  | "MUSICAL_CHAIRS";
+  | "MUSICAL_CHAIRS"
+  | "ROCKETS"
+  | "ROULETTE";
 
 /** sfc32 seeded from 4x32-bit words taken from the digest hex. */
 export function makeRng(digestHex: string): () => number {
@@ -146,6 +148,13 @@ function buildGameData(
   ticketCount: number,
 ): Record<string, unknown> {
   switch (game) {
+    case "ROCKETS": {
+      // Meteor "waves": each strike takes out a batch of the nearest tickets.
+      const waves: number[][] = [];
+      const size = Math.max(1, Math.ceil(eliminated.length / Math.max(1, Math.min(6, eliminated.length))));
+      for (let i = 0; i < eliminated.length; i += size) waves.push(eliminated.slice(i, i + size));
+      return { waves: waves.slice(0, MAX_ANIM) };
+    }
     case "BOMBS": {
       // Split eliminations into "explosion" phases of a few tickets each.
       const phases: number[][] = [];
@@ -211,4 +220,183 @@ function buildGameData(
     default:
       return { eliminated: eliminated.slice(0, MAX_ANIM) };
   }
+}
+
+// ===========================================================================
+// Show algorithm v2 — one drand digest seeds deterministic PER-GAME sims that
+// run server-side; the WINNERS are whoever survives all three games (no
+// pre-shuffle). Fixed public counts: games 1+2 leave exactly 10 finalists
+// (split N-10 in half, first game takes the extra), the finale narrows 10 to
+// the winners. Every victim choice is a pure function of the digest, so anyone
+// can reproduce it. Requires >= 20 tickets; below that it falls back to v1.
+// ===========================================================================
+
+export const FINALISTS = 10;
+export const MIN_TICKETS_V2 = 20;
+
+/** Rockets: a seeded subset is struck by meteor waves (hits are individual, so
+ * an arbitrary fair subset is fine). Grouped into ~6 waves for the animation. */
+function rocketsSim(rng: () => number, alive: number[], take: number): { eliminated: number[]; data: Record<string, unknown> } {
+  const victims = shuffle(rng, alive.slice()).slice(0, take);
+  const waves: number[][] = [];
+  const size = Math.max(1, Math.ceil(victims.length / Math.max(1, Math.min(6, victims.length))));
+  for (let i = 0; i < victims.length; i += size) waves.push(victims.slice(i, i + size));
+  return { eliminated: victims, data: { waves } };
+}
+
+/** Bombs "cruz errante": on a 10-column grid, remove tickets until exactly
+ * `targetSurvivors` remain, choosing the mechanic by how many still must go —
+ * CROSS (whole row+column) for big cuts, PINEAPPLE (host saved, nearest
+ * neighbours out) for medium, JUMP (single) for the last few. Victims are pure
+ * geometry from the current (reflowed) grid, so the choice is auditable and the
+ * client can replay the exact same board from `gridOrder` + `events`. */
+function bombsSim(rng: () => number, alive: number[], targetSurvivors: number): { eliminated: number[]; data: Record<string, unknown> } {
+  const COLS = 10;
+  let liv = shuffle(rng, alive.slice());
+  const gridOrder = liv.slice();
+  const events: Record<string, unknown>[] = [];
+  const eliminated: number[] = [];
+  const rowOf = (i: number) => Math.floor(i / COLS);
+  const colOf = (i: number) => i % COLS;
+  const remove = (victims: number[]) => { const vs = new Set(victims); liv = liv.filter((x) => !vs.has(x)); eliminated.push(...victims); };
+
+  let guard = 0;
+  while (liv.length > targetSurvivors && guard++ < 5000) {
+    const rem = liv.length - targetSurvivors;
+    const pos = new Map<number, number>(); liv.forEach((id, i) => pos.set(id, i));
+    const dist = (id: number, r: number, c: number) => Math.abs(rowOf(pos.get(id)!) - r) + Math.abs(colOf(pos.get(id)!) - c);
+    if (rem >= 8) {
+      const target = liv[randInt(rng, liv.length)];
+      const tr = rowOf(pos.get(target)!), tc = colOf(pos.get(target)!);
+      let victims = liv.filter((id) => rowOf(pos.get(id)!) === tr || colOf(pos.get(id)!) === tc);
+      victims.sort((a, b) => dist(a, tr, tc) - dist(b, tr, tc));
+      if (victims.length > rem) victims = victims.slice(0, rem);
+      events.push({ type: "cross", target, victims });
+      remove(victims);
+    } else if (rem >= 2) {
+      const host = liv[randInt(rng, liv.length)];
+      const hr = rowOf(pos.get(host)!), hc = colOf(pos.get(host)!);
+      const victims = liv.filter((id) => id !== host).sort((a, b) => dist(a, hr, hc) - dist(b, hr, hc)).slice(0, rem);
+      events.push({ type: "pine", host, victims });
+      remove(victims);
+    } else {
+      const victim = liv[randInt(rng, liv.length)];
+      const pool = liv.filter((id) => id !== victim);
+      const decoys: number[] = [];
+      for (let d = 0; d < Math.min(4, pool.length); d++) decoys.push(pool[randInt(rng, pool.length)]);
+      events.push({ type: "jump", victim, decoys });
+      remove([victim]);
+    }
+  }
+  return { eliminated, data: { cols: COLS, gridSeed: (rng() * 4294967296) >>> 0, gridOrder, events } };
+}
+
+/** Ruleta rusa (finale): the finalists sit in a fixed ring (their slot never
+ * moves; dead slots leave a gap). Each cycle loads 1..(alive-1) bullets into a
+ * hidden 6-chamber cylinder at seeded positions, then fires 6 shots — each aims
+ * a live slot; a loaded chamber is a BANG (that ticket is out), an empty one a
+ * CLICK (spared). Cycles repeat until `survivorsCount` remain. The full shot
+ * script is emitted so the client animates the exact clicks/bangs. */
+function rouletteSim(rng: () => number, alive: number[], survivorsCount: number): { eliminated: number[]; survivors: number[]; data: Record<string, unknown> } {
+  const slots = alive.slice();
+  const N = slots.length;
+  const dead = new Set<number>();
+  const eliminated: number[] = [];
+  const shots: Record<string, unknown>[] = [];
+  let aliveN = N;
+  let cycle = 0, guard = 0;
+
+  while (aliveN > survivorsCount && guard++ < 2000) {
+    cycle++;
+    const bullets = Math.min(1 + Math.floor(rng() * 6), aliveN - 1);
+    const chambers = Array(6).fill(false) as boolean[];
+    const idx = [0, 1, 2, 3, 4, 5];
+    for (let i = 5; i > 0; i--) { const j = Math.floor(rng() * (i + 1)); [idx[i], idx[j]] = [idx[j], idx[i]]; }
+    for (let i = 0; i < bullets; i++) chambers[idx[i]] = true;
+
+    const livSlots = slots.map((_, s) => s).filter((s) => !dead.has(s));
+    let aimedSlot = livSlots[Math.floor(rng() * livSlots.length)];
+
+    for (let shot = 0; shot < 6; shot++) {
+      const hit = chambers[shot];
+      shots.push({ cycle, bullets, shot, aimedSlot, aimed: slots[aimedSlot], hit });
+      if (hit) { dead.add(aimedSlot); eliminated.push(slots[aimedSlot]); aliveN--; if (aliveN <= survivorsCount) break; }
+      if (shot < 5 && aliveN > survivorsCount) { do { aimedSlot = (aimedSlot + 1) % N; } while (dead.has(aimedSlot)); }
+    }
+  }
+  const survivors = slots.filter((_, s) => !dead.has(s));
+  return { eliminated, survivors, data: { slots, shots } };
+}
+
+/** Finale dispatch. ROULETTE runs the revolver sim; anything else narrows the
+ * field with a plain seeded elimination (survivors in finish order). */
+function finaleSim(rng: () => number, game: GameType, alive: number[], survivorsCount: number): { eliminated: number[]; survivors: number[]; data: Record<string, unknown> } {
+  if (game === "ROULETTE") return rouletteSim(rng, alive, survivorsCount);
+  const order = shuffle(rng, alive.slice());
+  const elimCount = Math.max(0, alive.length - survivorsCount);
+  return { eliminated: order.slice(0, elimCount), survivors: order.slice(elimCount), data: { eliminated: order.slice(0, elimCount) } };
+}
+
+function gameSim(rng: () => number, game: GameType, alive: number[], take: number): { eliminated: number[]; data: Record<string, unknown> } {
+  if (take <= 0) return { eliminated: [], data: {} };
+  switch (game) {
+    case "ROCKETS": return rocketsSim(rng, alive, take);
+    case "BOMBS": return bombsSim(rng, alive, alive.length - take);
+    default: {
+      const victims = shuffle(rng, alive.slice()).slice(0, take);
+      return { eliminated: victims, data: { eliminated: victims } };
+    }
+  }
+}
+
+export function generateShowV2(opts: {
+  digest: string;
+  ticketCount: number;
+  winnersCount: number;
+  games: GameType[];
+  finale?: GameType | null;
+}): Show {
+  const N = opts.ticketCount;
+  const W = Math.max(1, Math.min(opts.winnersCount, N));
+  // Not enough tickets for the 3-game format (or too few games) → keep v1.
+  if (N < MIN_TICKETS_V2 || opts.games.length < 2) return generateShow(opts);
+
+  const rng = makeRng(opts.digest);
+  const uniq = [...new Set(opts.games)] as GameType[];
+  const finale = opts.finale && uniq.includes(opts.finale) ? opts.finale : uniq[uniq.length - 1];
+  const nonFinaleGames = uniq.filter((g) => g !== finale);
+  const order: GameType[] = [...nonFinaleGames, finale];
+  const nonFinale = nonFinaleGames.length;
+
+  const finalists = Math.min(FINALISTS, N);
+  const toCut = N - finalists;
+  const shares: number[] = [];
+  for (let i = 0; i < nonFinale; i++) {
+    const remStages = nonFinale - i;
+    const already = shares.reduce((a, b) => a + b, 0);
+    shares.push(Math.ceil((toCut - already) / remStages));
+  }
+
+  const stages: ShowStage[] = [];
+  let alive = Array.from({ length: N }, (_, i) => i);
+  let winners: number[] = [];
+
+  order.forEach((game, idx) => {
+    const isFinale = idx === order.length - 1;
+    const aliveBefore = alive.slice();
+    let elim: number[]; let data: Record<string, unknown>;
+    if (isFinale) {
+      const res = finaleSim(rng, game, aliveBefore, W);
+      elim = res.eliminated; data = res.data; winners = res.survivors;
+    } else {
+      const take = Math.max(0, Math.min(shares[idx], aliveBefore.length - finalists));
+      const res = gameSim(rng, game, aliveBefore, take);
+      elim = res.eliminated; data = res.data;
+    }
+    const gone = new Set(elim);
+    alive = alive.filter((i) => !gone.has(i));
+    stages.push({ game, isFinale, eliminated: elim, aliveBefore, data });
+  });
+
+  return { ticketCount: N, winnersCount: W, winners, stages };
 }

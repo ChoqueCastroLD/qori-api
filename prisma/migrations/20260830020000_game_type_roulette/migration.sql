@@ -1,0 +1,2 @@
+-- Add ROULETTE to the GameType enum
+ALTER TYPE "GameType" ADD VALUE IF NOT EXISTS 'ROULETTE';

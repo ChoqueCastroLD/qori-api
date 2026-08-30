@@ -49,8 +49,9 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
           minTickets: body.minTickets ?? 1,
           maxTicketsPerUser: body.maxTicketsPerUser ?? null,
           winnersCount: body.winnersCount ?? 1,
-          games: (body.games ?? ["ELIMINATION"]) as any,
-          finale: (body.finale ?? null) as any,
+          games: (body.games ?? ["ROCKETS", "BOMBS", "ROULETTE"]) as any,
+          finale: (body.finale ?? "ROULETTE") as any,
+          showVersion: 2, // new raffles use the per-game sim engine
           entropySource: "drand (round programada a la hora del sorteo) + raíz de tickets",
           commitment,
           serverSeed,

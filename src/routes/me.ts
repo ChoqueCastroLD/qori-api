@@ -245,17 +245,19 @@ export const me = new Elysia({ name: "me" })
               (t) => t.number,
             ),
           );
-          const chosen: number[] = [];
-          let guard = 0;
-          while (chosen.length < quantity && guard < raffle.totalTickets * 4) {
-            guard++;
-            const n = 1 + Math.floor(Math.random() * raffle.totalTickets);
-            if (!taken.has(n)) {
-              taken.add(n);
-              chosen.push(n);
-            }
+          // Build the list of still-available numbers, then pick `quantity` of
+          // them with a partial Fisher-Yates shuffle. Rejection sampling used to
+          // fail (could_not_assign) when buying a large fraction of the raffle —
+          // collecting N unique numbers out of N by random retries needs
+          // ~N·ln(N) tries, blowing past any fixed guard.
+          const available: number[] = [];
+          for (let n = 1; n <= raffle.totalTickets; n++) if (!taken.has(n)) available.push(n);
+          if (available.length < quantity) throw new Error("sold_out");
+          for (let i = 0; i < quantity; i++) {
+            const j = i + Math.floor(Math.random() * (available.length - i));
+            [available[i], available[j]] = [available[j], available[i]];
           }
-          if (chosen.length < quantity) throw new Error("could_not_assign");
+          const chosen: number[] = available.slice(0, quantity);
 
           await tx.ticket.createMany({
             data: chosen.map((number) => ({
@@ -291,7 +293,8 @@ export const me = new Elysia({ name: "me" })
             await tx.user.update({ where: { id: user.id }, data: { referralRewarded: true } });
           }
 
-          return { orderId: order.id, numbers: chosen.sort((a, b) => a - b), raffleTitle: raffle.title, slug: raffle.slug, sold: sold + quantity, total: raffle.totalTickets };
+          const owned = await tx.ticket.count({ where: { raffleId: raffle.id, ownerId: user.id } });
+          return { orderId: order.id, numbers: chosen.sort((a, b) => a - b), raffleTitle: raffle.title, slug: raffle.slug, sold: sold + quantity, total: raffle.totalTickets, owned, maxPerUser: raffle.maxTicketsPerUser };
         });
 
         // Broadcast the new sold count to everyone watching this raffle (live).
