@@ -229,13 +229,16 @@ export const me = new Elysia({ name: "me" })
             memo: `${quantity} ticket(s) de ${raffle.title}`,
           });
 
+          // +1 lingote bonus per ticket, ONLY on paid raffles (free raffles
+          // give no bonus — otherwise free tickets would mint lingotes).
+          const bonus = raffle.ticketPrice > 0 ? quantity : 0;
           const order = await tx.order.create({
             data: {
               raffleId: raffle.id,
               userId: user.id,
               quantity,
               costLingotes: cost,
-              bonusLingotes: quantity,
+              bonusLingotes: bonus,
             },
           });
 
@@ -269,15 +272,17 @@ export const me = new Elysia({ name: "me" })
             })),
           });
 
-          // +1 lingote bonus per ticket.
-          await applyLedger(tx, {
-            userId: user.id,
-            amount: quantity,
-            type: "TICKET_BONUS",
-            refType: "order",
-            refId: order.id,
-            memo: `Bono +${quantity} por compra`,
-          });
+          // +1 lingote bonus per ticket — paid raffles only.
+          if (bonus > 0) {
+            await applyLedger(tx, {
+              userId: user.id,
+              amount: bonus,
+              type: "TICKET_BONUS",
+              refType: "order",
+              refId: order.id,
+              memo: `Bono +${bonus} por compra`,
+            });
+          }
 
           // Referral reward: +10 to referrer on the referred user's FIRST purchase.
           const fresh = await tx.user.findUnique({ where: { id: user.id } });

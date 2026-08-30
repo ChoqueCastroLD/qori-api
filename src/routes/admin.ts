@@ -228,6 +228,24 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     },
   )
 
+  // Hard-delete a raffle and everything tied to it (tickets, orders, winners,
+  // notification log, and — via cascade — its show + chat). Ledger entries are
+  // history and are left intact. Irreversible; intended for test raffles.
+  .delete("/raffles/:id", async ({ params, set }) => {
+    const raffle = await db.raffle.findUnique({ where: { id: params.id } });
+    if (!raffle) { set.status = 404; return { error: "not_found" }; }
+    const res = await db.$transaction(async (tx) => {
+      const w = await tx.winner.deleteMany({ where: { raffleId: params.id } });
+      const t = await tx.ticket.deleteMany({ where: { raffleId: params.id } });
+      const o = await tx.order.deleteMany({ where: { raffleId: params.id } });
+      await tx.notificationLog.deleteMany({ where: { raffleId: params.id } });
+      await tx.raffle.delete({ where: { id: params.id } });
+      return { winners: w.count, tickets: t.count, orders: o.count };
+    });
+    bustRafflesCache();
+    return { ok: true, deleted: { slug: raffle.slug, ...res } };
+  })
+
   // Per-raffle breakdown: economics + full participant table (who bought, when,
   // how many, their comment, account age, current lingote balance).
   .get("/raffles/:id/detail", async ({ params, set }) => {
