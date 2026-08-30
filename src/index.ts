@@ -130,9 +130,14 @@ const app = new Elysia({ prefix: "/api" })
     let show: { startsAt: string; endsAt: string } | null = null;
     if (raffle.show?.startsAt && raffle.show.stages) {
       const stages = (raffle.show.stages as any)?.stages ?? (raffle.show.stages as any) ?? [];
-      const dur = Array.isArray(stages)
-        ? stages.reduce((acc: number, s: any, i: number) => acc + (s.eliminated?.length ?? 0) * 1050 + (i < stages.length - 1 ? 2200 : 0), 0)
-        : 0;
+      // v2 games are self-timed (own choreography), so the exact end isn't known
+      // here; use a generous window (the show self-terminates into the final
+      // screen). v1 uses the step-based estimate.
+      const dur = raffle.showVersion === 2
+        ? 8 * 60 * 1000
+        : Array.isArray(stages)
+          ? stages.reduce((acc: number, s: any, i: number) => acc + (s.eliminated?.length ?? 0) * 1050 + (i < stages.length - 1 ? 2200 : 0), 0)
+          : 0;
       const startsAt = new Date(raffle.show.startsAt).getTime();
       show = { startsAt: raffle.show.startsAt.toISOString(), endsAt: new Date(startsAt + dur + 2000).toISOString() };
     }
