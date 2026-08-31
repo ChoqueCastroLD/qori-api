@@ -12,7 +12,7 @@ import {
 } from "../lib/auth";
 import type { User } from "@prisma/client";
 import { sendEmail, verificationEmail, verificationCodeEmail, passwordResetEmail } from "../lib/email";
-import { makeEmailToken, verifyEmailToken, makeScopedToken, verifyScopedToken } from "../lib/emailToken";
+import { makeEmailToken, verifyEmailToken, makeScopedToken, verifyScopedToken, peekTokenUserId } from "../lib/emailToken";
 import { isAllowedEmailDomain } from "../lib/emailDomains";
 
 const codeHashFor = (code: string, email: string) => sha256Hex(`${code}:${email}`);
@@ -169,7 +169,8 @@ export const auth = new Elysia({ name: "auth" })
       // Resolve referrer from an optional referral code.
       let referredById: string | null = null;
       if (body.ref) {
-        const referrer = await db.user.findUnique({ where: { referralCode: body.ref } });
+        // Codes are generated uppercase; accept them case-insensitively.
+        const referrer = await db.user.findUnique({ where: { referralCode: body.ref.trim().toUpperCase() } });
         if (referrer) referredById = referrer.id;
       }
 
@@ -274,7 +275,10 @@ export const auth = new Elysia({ name: "auth" })
       }
       const user = await db.user.findUnique({ where: { email } });
       if (user) {
-        const token = await makeScopedToken(user.id, "pwreset", 30 * 60 * 1000);
+        // Bound to the current password hash: once the password changes, every
+        // outstanding reset link for this account stops working (single-use).
+        const bind = await sha256Hex(user.passwordHash ?? "none");
+        const token = await makeScopedToken(user.id, "pwreset", 30 * 60 * 1000, bind);
         const link = `${WEB_ORIGIN}/recuperar?token=${encodeURIComponent(token)}`;
         const { subject, html } = passwordResetEmail(link);
         void sendEmail({ to: user.email, subject, html }).catch(() => {});
@@ -289,13 +293,17 @@ export const auth = new Elysia({ name: "auth" })
   .post(
     "/auth/reset-password",
     async ({ body, set }) => {
-      const userId = await verifyScopedToken(body.token, "pwreset");
-      if (!userId) {
+      const candidateId = peekTokenUserId(body.token);
+      const user = candidateId ? await db.user.findUnique({ where: { id: candidateId } }) : null;
+      if (!user) {
         set.status = 422;
         return { error: "invalid_token" };
       }
-      const user = await db.user.findUnique({ where: { id: userId } });
-      if (!user) {
+      // The signature is bound to the password hash at request time, so a link
+      // that was already used (password changed) no longer verifies.
+      const bind = await sha256Hex(user.passwordHash ?? "none");
+      const userId = await verifyScopedToken(body.token, "pwreset", bind);
+      if (!userId) {
         set.status = 422;
         return { error: "invalid_token" };
       }

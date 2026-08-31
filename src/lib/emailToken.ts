@@ -13,21 +13,30 @@ export async function makeEmailToken(userId: string): Promise<string> {
 
 // --- Purpose-scoped tokens (e.g. password reset) ---
 // Same stateless shape, but the signature binds the purpose so a verify-email
-// token can never be replayed as a reset token (or vice versa).
+// token can never be replayed as a reset token (or vice versa). An optional
+// `bind` mixes extra state into the signature (e.g. the current password hash)
+// so the token self-invalidates when that state changes - a reset link becomes
+// single-use without any DB storage.
 
-export async function makeScopedToken(userId: string, purpose: string, ttlMs: number): Promise<string> {
+export async function makeScopedToken(userId: string, purpose: string, ttlMs: number, bind = ""): Promise<string> {
   const exp = Date.now() + ttlMs;
-  const sig = await hmacSha256Hex(SECRET, `${purpose}.${userId}.${exp}`);
+  const sig = await hmacSha256Hex(SECRET, `${purpose}.${userId}.${exp}.${bind}`);
   return `${userId}.${exp}.${sig}`;
 }
 
-export async function verifyScopedToken(token: string, purpose: string): Promise<string | null> {
+/** Returns the userId embedded in a token WITHOUT verifying it (to look up bind state). */
+export function peekTokenUserId(token: string): string | null {
+  const parts = token.split(".");
+  return parts.length === 3 && parts[0] ? parts[0] : null;
+}
+
+export async function verifyScopedToken(token: string, purpose: string, bind = ""): Promise<string | null> {
   const parts = token.split(".");
   if (parts.length !== 3) return null;
   const [userId, expStr, sig] = parts;
   const exp = Number(expStr);
   if (!userId || !Number.isFinite(exp) || exp < Date.now()) return null;
-  const expected = await hmacSha256Hex(SECRET, `${purpose}.${userId}.${exp}`);
+  const expected = await hmacSha256Hex(SECRET, `${purpose}.${userId}.${exp}.${bind}`);
   if (sig.length !== expected.length) return null;
   let diff = 0;
   for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);

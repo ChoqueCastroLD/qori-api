@@ -213,7 +213,9 @@ const app = new Elysia({ prefix: "/api" })
         serverSeed: t.String(),
         commitment: t.String(),
         publicEntropy: t.String(),
-        ticketCount: t.Integer({ minimum: 1 }),
+        // Bounded: this recomputes work proportional to ticketCount, so an
+        // unbounded value would let anyone burn server CPU.
+        ticketCount: t.Integer({ minimum: 1, maximum: 100_000 }),
         claimedWinnerIndex: t.Integer({ minimum: 0 }),
       }),
     },
@@ -252,9 +254,10 @@ const app = new Elysia({ prefix: "/api" })
         serverSeed: t.String(),
         commitment: t.String(),
         publicEntropy: t.String(),
-        ticketCount: t.Integer({ minimum: 1 }),
-        winnersCount: t.Integer({ minimum: 1 }),
-        games: t.Array(t.String()),
+        // Bounded for the same reason as /verify: work grows with ticketCount.
+        ticketCount: t.Integer({ minimum: 1, maximum: 100_000 }),
+        winnersCount: t.Integer({ minimum: 1, maximum: 100 }),
+        games: t.Array(t.String(), { maxItems: 20 }),
         finale: t.Optional(t.String()),
         showVersion: t.Optional(t.Integer()),
       }),

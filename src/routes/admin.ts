@@ -213,6 +213,15 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
           return { error: "total_below_sold", sold: soldNow };
         }
       }
+      // Keep games/finale consistent: the finale must be one of the games.
+      if (body.games !== undefined || body.finale !== undefined) {
+        const games = (body.games ?? (raffle.games as any) ?? []) as string[];
+        const finale = body.finale !== undefined ? body.finale : (raffle.finale as any);
+        if (finale && (games.length === 0 || !games.includes(finale))) {
+          set.status = 422;
+          return { error: "finale_not_in_games" };
+        }
+      }
       const data: any = {};
       if (body.title !== undefined) data.title = body.title;
       if (body.description !== undefined) data.description = body.description;
@@ -488,8 +497,12 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
 
   // Read-only topups view (all recharges are automatic via MP/PayPal now; no
   // manual approval - that could credit unconfirmed payments).
-  .get("/topups", async ({ query }) => {
+  .get("/topups", async ({ query, set }) => {
     const status = (query.status as string) ?? "PAID";
+    if (!["PAID", "PENDING", "FAILED", "REFUNDED"].includes(status)) {
+      set.status = 422;
+      return { error: "invalid_status" };
+    }
     return db.topUp.findMany({
       where: { status: status as any },
       include: { user: { select: { email: true, nickname: true } } },
