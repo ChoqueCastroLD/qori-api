@@ -72,7 +72,7 @@ export async function sendResults(raffleId: string) {
   let i = 0;
   for (const st of show.stages ?? []) for (const idx of st.eliminated ?? []) posOf.set(idx, i++);
 
-  // Users who won with ANY ticket — they only get the winner email, never the
+  // Users who won with ANY ticket - they only get the winner email, never the
   // "estuviste cerca" one (even if they also hold losing tickets).
   const winnerUserIds = new Set<string>();
   for (const wi of show.winners ?? []) {

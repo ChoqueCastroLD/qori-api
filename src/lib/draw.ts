@@ -37,7 +37,7 @@ async function fetchDrandRound(round: number): Promise<{ round: number; randomne
 /**
  * The drand round fixed by the raffle's close time. The round number is fully
  * determined by `closesAt` (public), and its VALUE stays unpredictable until
- * that time — so neither the operator nor anyone else can grind or foresee it.
+ * that time - so neither the operator nor anyone else can grind or foresee it.
  * Returns null if that round hasn't been published yet (draw not ready).
  */
 export async function drandForCloseTime(closesAtMs: number): Promise<{ round: number; randomness: string } | null> {

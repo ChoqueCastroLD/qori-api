@@ -1,5 +1,5 @@
 /**
- * @qori/fair — Provably-fair draw engine.
+ * @qori/fair - Provably-fair draw engine.
  *
  * Trust model (commit–reveal + public entropy):
  *
@@ -19,7 +19,7 @@
  *              and the winner and confirms both match. No trust required.
  *
  * This module is pure and dependency-free (Web Crypto). It is the single source
- * of truth for draw math — the API imports it, and the public verifier page
+ * of truth for draw math - the API imports it, and the public verifier page
  * imports the *same* code so users verify with identical logic.
  */
 

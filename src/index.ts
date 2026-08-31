@@ -125,7 +125,7 @@ const app = new Elysia({ prefix: "/api" })
     }
     // Live-show window: the animation plays from startsAt to startsAt+duration.
     // Same timing as the client (STEP_MS 1050 per elimination, GAP_MS 2200
-    // between stages — MUST match ShowPlayer.tsx). Lets the page route people
+    // between stages - MUST match ShowPlayer.tsx). Lets the page route people
     // into the live show and avoid spoilers.
     let show: { startsAt: string; endsAt: string } | null = null;
     if (raffle.show?.startsAt && raffle.show.stages) {
@@ -185,13 +185,14 @@ const app = new Elysia({ prefix: "/api" })
     const tickets = await db.ticket.findMany({
       where: { raffleId: raffle.id },
       orderBy: { number: "asc" },
-      include: { owner: { select: { nickname: true, avatarUrl: true } } },
+      include: { owner: { select: { nickname: true, avatarUrl: true, username: true } } },
     });
     const participants = tickets.map((t) => ({
       number: t.number,
       comment: t.comment,
       nickname: t.owner?.nickname ?? null,
       avatarUrl: t.owner?.avatarUrl ?? null,
+      username: t.owner?.username ?? null,
       boughtAt: t.createdAt,
     }));
     return {

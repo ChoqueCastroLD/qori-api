@@ -4,7 +4,7 @@
  * The winners AND the entire on-screen sequence (elimination order, bomb
  * placement, squid rounds, horse steps, digit reveals) are a pure function of
  * the draw `digest` = HMAC(serverSeed, publicEntropy). Anyone with the revealed
- * seed can reproduce the show bit-for-bit — see docs/FAIRNESS.md.
+ * seed can reproduce the show bit-for-bit - see docs/FAIRNESS.md.
  *
  * The PRNG is `sfc32` seeded from 128 bits of the digest. It is a non-crypto
  * generator used only to EXPAND the crypto-strong digest into a reproducible
@@ -223,7 +223,7 @@ function buildGameData(
 }
 
 // ===========================================================================
-// Show algorithm v2 — one drand digest seeds deterministic PER-GAME sims that
+// Show algorithm v2 - one drand digest seeds deterministic PER-GAME sims that
 // run server-side; the WINNERS are whoever survives all three games (no
 // pre-shuffle). Fixed public counts: games 1+2 leave exactly 10 finalists
 // (split N-10 in half, first game takes the extra), the finale narrows 10 to
@@ -245,7 +245,7 @@ function rocketsSim(rng: () => number, alive: number[], take: number): { elimina
 }
 
 /** Bombs "cruz errante": on a 10-column grid, remove tickets until exactly
- * `targetSurvivors` remain, choosing the mechanic by how many still must go —
+ * `targetSurvivors` remain, choosing the mechanic by how many still must go -
  * CROSS (whole row+column) for big cuts, PINEAPPLE (host saved, nearest
  * neighbours out) for medium, JUMP (single) for the last few. Victims are pure
  * geometry from the current (reflowed) grid, so the choice is auditable and the
@@ -293,7 +293,7 @@ function bombsSim(rng: () => number, alive: number[], targetSurvivors: number): 
 
 /** Ruleta rusa (finale): the finalists sit in a fixed ring (their slot never
  * moves; dead slots leave a gap). Each cycle loads 1..(alive-1) bullets into a
- * hidden 6-chamber cylinder at seeded positions, then fires 6 shots — each aims
+ * hidden 6-chamber cylinder at seeded positions, then fires 6 shots - each aims
  * a live slot; a loaded chamber is a BANG (that ticket is out), an empty one a
  * CLICK (spared). Cycles repeat until `survivorsCount` remain. The full shot
  * script is emitted so the client animates the exact clicks/bangs. */

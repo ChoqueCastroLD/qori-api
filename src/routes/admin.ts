@@ -28,7 +28,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       orderBy: { createdAt: "desc" },
       include: { _count: { select: { tickets: true, orders: true } } },
     });
-    // drandRound is BigInt — not JSON-serializable; expose as string.
+    // drandRound is BigInt - not JSON-serializable; expose as string.
     return raffles.map((r) => ({ ...r, drandRound: r.drandRound != null ? r.drandRound.toString() : null }));
   })
 
@@ -229,7 +229,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   )
 
   // Hard-delete a raffle and everything tied to it (tickets, orders, winners,
-  // notification log, and — via cascade — its show + chat). Ledger entries are
+  // notification log, and - via cascade - its show + chat). Ledger entries are
   // history and are left intact. Irreversible; intended for test raffles.
   .delete("/raffles/:id", async ({ params, set }) => {
     const raffle = await db.raffle.findUnique({ where: { id: params.id } });
@@ -463,7 +463,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   )
 
   // Read-only topups view (all recharges are automatic via MP/PayPal now; no
-  // manual approval — that could credit unconfirmed payments).
+  // manual approval - that could credit unconfirmed payments).
   .get("/topups", async ({ query }) => {
     const status = (query.status as string) ?? "PAID";
     return db.topUp.findMany({

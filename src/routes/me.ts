@@ -230,7 +230,7 @@ export const me = new Elysia({ name: "me" })
           });
 
           // +1 lingote bonus per ticket, ONLY on paid raffles (free raffles
-          // give no bonus — otherwise free tickets would mint lingotes).
+          // give no bonus - otherwise free tickets would mint lingotes).
           const bonus = raffle.ticketPrice > 0 ? quantity : 0;
           const order = await tx.order.create({
             data: {
@@ -250,7 +250,7 @@ export const me = new Elysia({ name: "me" })
           );
           // Build the list of still-available numbers, then pick `quantity` of
           // them with a partial Fisher-Yates shuffle. Rejection sampling used to
-          // fail (could_not_assign) when buying a large fraction of the raffle —
+          // fail (could_not_assign) when buying a large fraction of the raffle -
           // collecting N unique numbers out of N by random retries needs
           // ~N·ln(N) tries, blowing past any fixed guard.
           const available: number[] = [];
@@ -272,7 +272,7 @@ export const me = new Elysia({ name: "me" })
             })),
           });
 
-          // +1 lingote bonus per ticket — paid raffles only.
+          // +1 lingote bonus per ticket - paid raffles only.
           if (bonus > 0) {
             await applyLedger(tx, {
               userId: user.id,

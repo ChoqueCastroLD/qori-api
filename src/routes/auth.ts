@@ -246,7 +246,7 @@ export const auth = new Elysia({ name: "auth" })
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const redirectUri = process.env.GOOGLE_REDIRECT_URI;
     if (!clientId || !redirectUri) {
-      // Not configured yet — bounce back to the login page with a friendly note
+      // Not configured yet - bounce back to the login page with a friendly note
       // instead of showing raw JSON.
       set.status = 302; set.headers.location = `${WEB_ORIGIN}/entrar?oauth=unavailable`;
       return;
