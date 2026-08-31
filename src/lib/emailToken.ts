@@ -11,6 +11,29 @@ export async function makeEmailToken(userId: string): Promise<string> {
   return `${userId}.${exp}.${sig}`;
 }
 
+// --- Purpose-scoped tokens (e.g. password reset) ---
+// Same stateless shape, but the signature binds the purpose so a verify-email
+// token can never be replayed as a reset token (or vice versa).
+
+export async function makeScopedToken(userId: string, purpose: string, ttlMs: number): Promise<string> {
+  const exp = Date.now() + ttlMs;
+  const sig = await hmacSha256Hex(SECRET, `${purpose}.${userId}.${exp}`);
+  return `${userId}.${exp}.${sig}`;
+}
+
+export async function verifyScopedToken(token: string, purpose: string): Promise<string | null> {
+  const parts = token.split(".");
+  if (parts.length !== 3) return null;
+  const [userId, expStr, sig] = parts;
+  const exp = Number(expStr);
+  if (!userId || !Number.isFinite(exp) || exp < Date.now()) return null;
+  const expected = await hmacSha256Hex(SECRET, `${purpose}.${userId}.${exp}`);
+  if (sig.length !== expected.length) return null;
+  let diff = 0;
+  for (let i = 0; i < sig.length; i++) diff |= sig.charCodeAt(i) ^ expected.charCodeAt(i);
+  return diff === 0 ? userId : null;
+}
+
 export async function verifyEmailToken(token: string): Promise<string | null> {
   const parts = token.split(".");
   if (parts.length !== 3) return null;

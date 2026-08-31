@@ -11,11 +11,33 @@ import {
   verifyPassword,
 } from "../lib/auth";
 import type { User } from "@prisma/client";
-import { sendEmail, verificationEmail, verificationCodeEmail } from "../lib/email";
-import { makeEmailToken, verifyEmailToken } from "../lib/emailToken";
+import { sendEmail, verificationEmail, verificationCodeEmail, passwordResetEmail } from "../lib/email";
+import { makeEmailToken, verifyEmailToken, makeScopedToken, verifyScopedToken } from "../lib/emailToken";
 import { isAllowedEmailDomain } from "../lib/emailDomains";
 
 const codeHashFor = (code: string, email: string) => sha256Hex(`${code}:${email}`);
+
+// Per-email cooldown for password-reset requests (in-memory, single instance).
+const forgotCooldown = new Map<string, number>();
+
+// Naive brute-force guard: max 10 failed logins per email per 15 minutes.
+const loginFails = new Map<string, { count: number; first: number }>();
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+function loginBlocked(email: string): boolean {
+  const e = loginFails.get(email);
+  if (!e) return false;
+  if (Date.now() - e.first > LOGIN_WINDOW_MS) { loginFails.delete(email); return false; }
+  return e.count >= 10;
+}
+function recordLoginFail(email: string) {
+  const now = Date.now();
+  const e = loginFails.get(email);
+  if (!e || now - e.first > LOGIN_WINDOW_MS) loginFails.set(email, { count: 1, first: now });
+  else e.count++;
+  if (loginFails.size > 5000) {
+    for (const [k, v] of loginFails) if (now - v.first > LOGIN_WINDOW_MS) loginFails.delete(k);
+  }
+}
 
 /** Fire-and-forget verification email. */
 async function sendVerification(user: { id: string; email: string }) {
@@ -208,11 +230,17 @@ export const auth = new Elysia({ name: "auth" })
     "/auth/login",
     async ({ body, cookie, set, request }) => {
       const email = body.email.trim().toLowerCase();
+      if (loginBlocked(email)) {
+        set.status = 429;
+        return { error: "too_many_attempts" };
+      }
       const user = await db.user.findUnique({ where: { email } });
       if (!user || !user.passwordHash || !(await verifyPassword(body.password, user.passwordHash))) {
+        recordLoginFail(email);
         set.status = 401;
         return { error: "invalid_credentials" };
       }
+      loginFails.delete(email);
       const { token, expiresAt } = await createSession(user.id, {
         userAgent: request.headers.get("user-agent") ?? undefined,
       });
@@ -223,6 +251,65 @@ export const auth = new Elysia({ name: "auth" })
       body: t.Object({
         email: t.String({ format: "email" }),
         password: t.String(),
+      }),
+    },
+  )
+
+  // --- Forgot password: email a reset link ---
+  // Always responds ok (never reveals whether the email exists). 60s in-memory
+  // cooldown per email against abuse.
+  .post(
+    "/auth/forgot-password",
+    async ({ body, set }) => {
+      const email = body.email.trim().toLowerCase();
+      const now = Date.now();
+      const last = forgotCooldown.get(email) ?? 0;
+      if (now - last < 60_000) {
+        set.status = 429;
+        return { error: "too_soon" };
+      }
+      forgotCooldown.set(email, now);
+      if (forgotCooldown.size > 5000) {
+        for (const [k, v] of forgotCooldown) if (now - v > 10 * 60_000) forgotCooldown.delete(k);
+      }
+      const user = await db.user.findUnique({ where: { email } });
+      if (user) {
+        const token = await makeScopedToken(user.id, "pwreset", 30 * 60 * 1000);
+        const link = `${WEB_ORIGIN}/recuperar?token=${encodeURIComponent(token)}`;
+        const { subject, html } = passwordResetEmail(link);
+        void sendEmail({ to: user.email, subject, html }).catch(() => {});
+      }
+      return { ok: true };
+    },
+    { body: t.Object({ email: t.String({ format: "email" }) }) },
+  )
+
+  // --- Reset password with an emailed token ---
+  // Sets the new password and revokes every existing session.
+  .post(
+    "/auth/reset-password",
+    async ({ body, set }) => {
+      const userId = await verifyScopedToken(body.token, "pwreset");
+      if (!userId) {
+        set.status = 422;
+        return { error: "invalid_token" };
+      }
+      const user = await db.user.findUnique({ where: { id: userId } });
+      if (!user) {
+        set.status = 422;
+        return { error: "invalid_token" };
+      }
+      await db.user.update({
+        where: { id: userId },
+        data: { passwordHash: await hashPassword(body.password) },
+      });
+      await db.session.deleteMany({ where: { userId } }).catch(() => {});
+      return { ok: true };
+    },
+    {
+      body: t.Object({
+        token: t.String({ maxLength: 300 }),
+        password: t.String({ minLength: 8, maxLength: 200 }),
       }),
     },
   )

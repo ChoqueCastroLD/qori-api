@@ -4,6 +4,21 @@ import { withUser } from "./auth";
 
 const CHAT_GRACE_MS = 5 * 60 * 1000; // chat stays open 5 min after the draw
 
+// Light anti-spam: minimum gap between messages per user (in-memory; single
+// backend instance). Old entries are pruned opportunistically.
+const CHAT_COOLDOWN_MS = 2000;
+const lastMessageAt = new Map<string, number>();
+function tooFast(userId: string): boolean {
+  const now = Date.now();
+  const last = lastMessageAt.get(userId) ?? 0;
+  if (now - last < CHAT_COOLDOWN_MS) return true;
+  lastMessageAt.set(userId, now);
+  if (lastMessageAt.size > 5000) {
+    for (const [k, v] of lastMessageAt) if (now - v > 60_000) lastMessageAt.delete(k);
+  }
+  return false;
+}
+
 export const chat = new Elysia({ name: "chat" })
   .use(withUser)
   // List recent messages (optionally only those after a timestamp, for polling).
@@ -49,6 +64,10 @@ export const chat = new Elysia({ name: "chat" })
       if (!text) {
         set.status = 422;
         return { error: "empty" };
+      }
+      if (tooFast(user.id)) {
+        set.status = 429;
+        return { error: "too_fast" };
       }
       const msg = await db.chatMessage.create({
         data: {

@@ -86,6 +86,18 @@ export function verificationCodeEmail(code: string): { subject: string; html: st
   };
 }
 
+export function passwordResetEmail(link: string): { subject: string; html: string } {
+  return {
+    subject: "Restablece tu contraseña · qori",
+    html: template({
+      heading: "Restablece tu contraseña",
+      body: "Recibimos un pedido para cambiar la contraseña de tu cuenta qori. Haz clic en el botón para elegir una nueva. El enlace vence en 30 minutos.",
+      cta: { label: "Elegir nueva contraseña", url: link },
+      footnote: "Si no pediste este cambio, ignora este mensaje: tu contraseña seguirá siendo la misma.",
+    }),
+  };
+}
+
 export function topupApprovedEmail(lingotes: number, amountUsd: number): { subject: string; html: string } {
   return {
     subject: "Recarga confirmada",
@@ -105,7 +117,7 @@ export function purchaseEmail(raffleTitle: string, numbers: number[], slug: stri
     subject: `Tickets confirmados · ${raffleTitle}`,
     html: template({
       heading: "¡Ya estás participando!",
-      body: `Compraste ${numbers.length} ticket(s) de <strong>${raffleTitle}</strong>. Tus números:<div style="margin-top:12px">${chips}</div>`,
+      body: `Compraste ${numbers.length} ${numbers.length === 1 ? "ticket" : "tickets"} de <strong>${raffleTitle}</strong>. ${numbers.length === 1 ? "Tu número:" : "Tus números:"}<div style="margin-top:12px">${chips}</div>`,
       cta: { label: "Ver el sorteo", url: `${WEB_ORIGIN}/sorteos/${slug}` },
     }),
   };

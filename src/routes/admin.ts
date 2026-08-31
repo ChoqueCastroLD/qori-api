@@ -35,7 +35,23 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   // Create a raffle (auto-commitment, opens immediately).
   .post(
     "/raffles",
-    async ({ body }) => {
+    async ({ body, set }) => {
+      // URL-safe slug; anything else breaks /sorteos/:slug routing.
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(body.slug)) {
+        set.status = 422;
+        return { error: "invalid_slug" };
+      }
+      const games = (body.games ?? ["ROCKETS", "BOMBS", "ROULETTE"]) as string[];
+      const finale = body.finale ?? "ROULETTE";
+      if (games.length === 0 || !games.includes(finale)) {
+        set.status = 422;
+        return { error: "finale_not_in_games" };
+      }
+      const existing = await db.raffle.findUnique({ where: { slug: body.slug } });
+      if (existing) {
+        set.status = 409;
+        return { error: "slug_taken" };
+      }
       const { serverSeed, commitment } = await createCommitment();
       const raffle = await db.raffle.create({
         data: {
@@ -49,8 +65,8 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
           minTickets: body.minTickets ?? 1,
           maxTicketsPerUser: body.maxTicketsPerUser ?? null,
           winnersCount: body.winnersCount ?? 1,
-          games: (body.games ?? ["ROCKETS", "BOMBS", "ROULETTE"]) as any,
-          finale: (body.finale ?? "ROULETTE") as any,
+          games: games as any,
+          finale: finale as any,
           showVersion: 2, // new raffles use the per-game sim engine
           entropySource: "drand (round programada a la hora del sorteo) + raíz de tickets",
           commitment,
@@ -189,6 +205,14 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         return { error: "locked", status: raffle.status };
       }
       const cosmeticOnly = raffle.legacy;
+      // Never shrink capacity below what's already sold.
+      if (body.totalTickets !== undefined) {
+        const soldNow = await db.ticket.count({ where: { raffleId: raffle.id } });
+        if (body.totalTickets < soldNow) {
+          set.status = 422;
+          return { error: "total_below_sold", sold: soldNow };
+        }
+      }
       const data: any = {};
       if (body.title !== undefined) data.title = body.title;
       if (body.description !== undefined) data.description = body.description;
