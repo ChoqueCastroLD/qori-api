@@ -193,3 +193,28 @@ export function winnerEmail(raffleTitle: string, ticketNumber: number, slug: str
     }),
   };
 }
+
+// Prize claim email: how much they won + how to redeem (Discord @shoko_cc) + the
+// claim code + a strong "do not share" warning.
+export function prizeClaimEmail(raffleTitle: string, ticketNumber: number, prizeValueCents: number, code: string, slug: string): { subject: string; html: string } {
+  const value = prizeValueCents > 0 ? `, valorado en aproximadamente <strong>$${(prizeValueCents / 100).toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 })} USD</strong>` : "";
+  const codeBox = `<div style="margin:20px 0;padding:16px;border:2px dashed #10b981;border-radius:14px;background:#ecfdf5;text-align:center">
+      <div style="font-size:11px;font-weight:700;letter-spacing:.12em;text-transform:uppercase;color:#059669">Tu código de canje</div>
+      <div style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:26px;font-weight:800;color:#065f46;letter-spacing:.08em;margin-top:6px">${code}</div>
+    </div>`;
+  return {
+    subject: `Reclama tu premio: ${raffleTitle}`,
+    html: template({
+      heading: "¡Ganaste! Reclama tu premio",
+      body:
+        `Tu ticket <strong>#${ticketNumber}</strong> ganó <strong>${raffleTitle}</strong>${value}.` +
+        `<br><br>Para reclamarlo, escríbeme por <strong>Discord</strong> a <strong>@shoko_cc</strong> y entrégame tu código de canje:` +
+        codeBox +
+        `<div style="margin-top:4px;padding:12px 14px;border-radius:12px;background:#fef2f2;border:1px solid #fecaca;color:#991b1b;font-size:14px">
+           <strong>Importante:</strong> no compartas este código con nadie. Solo debes darlo por Discord a <strong>@shoko_cc</strong>. Cualquiera con el código podría intentar reclamar tu premio.
+         </div>` +
+        `<p style="margin:16px 0 0;font-size:13px;color:#64748b">Si lo pierdes, siempre puedes volver a verlo en tu cuenta, en "Mis premios".</p>`,
+      cta: { label: "Ver el sorteo", url: `${WEB_ORIGIN}/sorteos/${slug}` },
+    }),
+  };
+}

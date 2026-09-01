@@ -1,5 +1,6 @@
 import { db } from "../db";
-import { sendEmail, winnerEmail, resultsEmail, postponedEmail } from "./email";
+import { sendEmail, winnerEmail, resultsEmail, postponedEmail, prizeClaimEmail } from "./email";
+import { newClaimCode } from "./claim";
 
 /** Postponement notice to each participant, personalized with their ref code. */
 export async function sendPostponed(raffleId: string, raffleTitle: string, slug: string, newDate: string) {
@@ -80,13 +81,18 @@ export async function sendResults(raffleId: string) {
     if (t?.ownerId) winnerUserIds.add(t.ownerId);
   }
 
-  // Winners: one email per winning USER (dedupe multi-ticket winners).
-  const emailedWinners = new Set<string>();
-  for (const wi of show.winners ?? []) {
-    const t = tickets[wi];
-    if (!t?.ownerId || !t.owner?.email || emailedWinners.has(t.ownerId)) continue;
-    emailedWinners.add(t.ownerId);
-    await sendEmail({ to: t.owner.email, ...winnerEmail(raffle.title, t.number, raffle.slug) }).catch(() => {});
+  // Winners: a prize-claim email per winning prize (how much + Discord @shoko_cc
+  // + the claim code + a "do not share" warning). One per Winner row so a user
+  // who won multiple prizes gets each code.
+  const winRows = await db.winner.findMany({
+    where: { raffleId },
+    include: { ticket: { select: { number: true } }, user: { select: { email: true } } },
+  });
+  for (const w of winRows) {
+    if (!w.user?.email) continue;
+    const code = w.claimCode ?? (await newClaimCode());
+    await sendEmail({ to: w.user.email, ...prizeClaimEmail(raffle.title, w.ticket?.number ?? 0, raffle.prizeValue, code, raffle.slug) }).catch(() => {});
+    await db.winner.update({ where: { id: w.id }, data: { notifiedAt: new Date(), ...(w.claimCode ? {} : { claimCode: code }) } });
   }
 
   // Non-winners: best (smallest) "lugares del ganar" per user. Skip anyone who

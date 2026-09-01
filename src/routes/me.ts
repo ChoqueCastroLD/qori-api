@@ -179,6 +179,23 @@ export const me = new Elysia({ name: "me" })
     return { tickets };
   })
 
+  // My prizes: raffles I won, with the private claim code (only the owner sees it).
+  .get("/me/wins", async ({ user, set }) => {
+    if (!requireUser(user, set)) return { error: "unauthenticated" };
+    const wins = await db.winner.findMany({
+      where: { userId: user.id },
+      include: { raffle: { select: { slug: true, title: true, images: true, prizeValue: true, drawnAt: true } }, ticket: { select: { number: true } } },
+      orderBy: { createdAt: "desc" },
+    });
+    return {
+      wins: wins.map((w) => ({
+        id: w.id, position: w.position, prizeStatus: w.prizeStatus, claimCode: w.claimCode,
+        ticketNumber: w.ticket?.number ?? null, drawnAt: w.raffle.drawnAt,
+        raffle: { slug: w.raffle.slug, title: w.raffle.title, image: w.raffle.images?.[0] ?? null, prizeValue: w.raffle.prizeValue },
+      })),
+    };
+  })
+
   .get("/me/orders", async ({ user, set }) => {
     if (!requireUser(user, set)) return { error: "unauthenticated" };
     const orders = await db.order.findMany({

@@ -3,6 +3,7 @@ import { applyLedger } from "./wallet";
 import { hmacSha256Hex, sha256Hex } from "../fair";
 import { generateShow, generateShowV2, type GameType } from "../show";
 import { publishDrawStart } from "./liveRaffles";
+import { newClaimCode } from "./claim";
 
 const DRAND_BASE = "https://api.drand.sh";
 
@@ -108,6 +109,9 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
   const useV2 = raffle.showVersion === 2;
   const show = useV2 ? generateShowV2(showOpts) : generateShow(showOpts);
   const winnerTickets = show.winners.map((idx) => tickets[idx]);
+  // A unique prize-claim code per winner, generated up front.
+  const claimCodes: string[] = [];
+  for (let i = 0; i < winnerTickets.length; i++) claimCodes.push(await newClaimCode());
 
   await db.$transaction(async (tx) => {
     await tx.raffle.update({
@@ -123,7 +127,7 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
     });
     for (let i = 0; i < winnerTickets.length; i++) {
       await tx.winner.create({
-        data: { raffleId, ticketId: winnerTickets[i].id, userId: winnerTickets[i].ownerId, position: i + 1 },
+        data: { raffleId, ticketId: winnerTickets[i].id, userId: winnerTickets[i].ownerId, position: i + 1, claimCode: claimCodes[i] },
       });
     }
     // startsAt = now → the live synchronized show begins immediately.

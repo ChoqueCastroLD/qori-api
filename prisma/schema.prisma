@@ -336,6 +336,13 @@ model Winner {
   position Int    @default(1) // 1 = first winner, for multi-winner raffles
   createdAt DateTime @default(now())
 
+  // Prize claim: unique code the winner shows (only via Discord to @shoko_cc) to
+  // redeem. prizeStatus: PENDING (por reclamar) | DELIVERED (entregado).
+  claimCode   String?   @unique
+  prizeStatus String    @default("PENDING")
+  notifiedAt  DateTime? // when the "you won, claim your prize" email was sent
+  deliveredAt DateTime?
+
   @@unique([raffleId, position])
   @@index([raffleId])
 }

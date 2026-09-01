@@ -7,6 +7,8 @@ import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from ".
 import { getPayment } from "../lib/mercadopago";
 import { getOrderBreakdown } from "../lib/paypal";
 import { bustRafflesCache } from "../lib/rafflesCache";
+import { sendEmail, prizeClaimEmail } from "../lib/email";
+import { newClaimCode } from "../lib/claim";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
@@ -277,6 +279,54 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     });
     bustRafflesCache();
     return { ok: true, deleted: { slug: raffle.slug, ...res } };
+  })
+
+  // --- Prize winners: list, mark delivered, and notify (backfill) ---
+  .get("/winners", async () => {
+    const winners = await db.winner.findMany({
+      include: {
+        raffle: { select: { slug: true, title: true, prizeValue: true, drawnAt: true, legacy: true } },
+        ticket: { select: { number: true } },
+        user: { select: { nickname: true, email: true, username: true } },
+      },
+      orderBy: [{ createdAt: "desc" }],
+    });
+    return winners.map((w) => ({
+      id: w.id, position: w.position, prizeStatus: w.prizeStatus, claimCode: w.claimCode,
+      notifiedAt: w.notifiedAt, deliveredAt: w.deliveredAt, ticketNumber: w.ticket?.number ?? null,
+      name: w.name ?? w.user?.nickname ?? null, email: w.user?.email ?? null, username: w.user?.username ?? null,
+      raffle: { slug: w.raffle.slug, title: w.raffle.title, prizeValue: w.raffle.prizeValue, drawnAt: w.raffle.drawnAt, legacy: w.raffle.legacy },
+    }));
+  })
+  .patch(
+    "/winners/:id",
+    async ({ params, body, set }) => {
+      const w = await db.winner.findUnique({ where: { id: params.id } });
+      if (!w) { set.status = 404; return { error: "not_found" }; }
+      const status = body.prizeStatus === "DELIVERED" ? "DELIVERED" : "PENDING";
+      await db.winner.update({ where: { id: params.id }, data: { prizeStatus: status, deliveredAt: status === "DELIVERED" ? (w.deliveredAt ?? new Date()) : null } });
+      return { ok: true, prizeStatus: status };
+    },
+    { body: t.Object({ prizeStatus: t.String() }) },
+  )
+  // Backfill: email past winners (platform account, non-legacy, not yet notified)
+  // their claim code. `?dryRun=1` previews recipients without sending.
+  .post("/winners/notify", async ({ query }) => {
+    const dryRun = query.dryRun === "1" || query.dryRun === "true";
+    const winners = await db.winner.findMany({
+      where: { notifiedAt: null, userId: { not: null }, raffle: { legacy: false } },
+      include: { raffle: { select: { title: true, slug: true, prizeValue: true } }, ticket: { select: { number: true } }, user: { select: { email: true } } },
+    });
+    const targets = winners.filter((w) => w.user?.email);
+    if (dryRun) return { dryRun: true, count: targets.length, recipients: targets.map((w) => ({ email: w.user!.email, raffle: w.raffle.title })) };
+    let sent = 0;
+    for (const w of targets) {
+      const code = w.claimCode ?? (await newClaimCode());
+      await sendEmail({ to: w.user!.email!, ...prizeClaimEmail(w.raffle.title, w.ticket?.number ?? 0, w.raffle.prizeValue, code, w.raffle.slug) }).catch(() => {});
+      await db.winner.update({ where: { id: w.id }, data: { notifiedAt: new Date(), ...(w.claimCode ? {} : { claimCode: code }) } });
+      sent++;
+    }
+    return { ok: true, sent };
   })
 
   // Per-raffle breakdown: economics + full participant table (who bought, when,
