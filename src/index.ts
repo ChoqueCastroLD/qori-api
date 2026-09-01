@@ -56,6 +56,44 @@ function publicRaffle(r: any) {
   };
 }
 
+// Public featured/nearest-open raffle for banners/widgets on any origin.
+async function publicFeatured(set: any) {
+  set.headers["cache-control"] = "public, max-age=60, s-maxage=60";
+  set.headers["access-control-allow-origin"] = "*";
+  const now = new Date();
+  const r = await db.raffle.findFirst({
+    where: { status: "OPEN", blocked: false, legacy: false, closesAt: { not: null } },
+    orderBy: { closesAt: "asc" },
+    include: { _count: { select: { tickets: true } } },
+  });
+  if (!r) return { serverNow: now.toISOString(), raffle: null };
+  return {
+    serverNow: now.toISOString(),
+    raffle: {
+      id: r.id,
+      slug: r.slug,
+      url: `${WEB_ORIGIN}/sorteos/${r.slug}`,
+      status: "open",
+      prize: {
+        name: r.title,
+        imageUrl: r.images?.[0] ?? null,
+        valueAmount: r.prizeValue / 100, // cents -> USD
+        currency: "USD",
+      },
+      endsAt: r.closesAt ? r.closesAt.toISOString() : null,
+      drawTimezone: "America/Lima",
+      ticketPriceAmount: r.ticketPrice / 10, // lingotes -> USD (10 lingotes = 1 USD)
+      minTickets: r.minTickets,
+      maxTickets: r.totalTickets,
+      soldTickets: r._count?.tickets ?? 0,
+      cashAlternative: true,
+      sameDayDelivery: true,
+      provablyFair: !r.legacy,
+      minAge: 18,
+    },
+  };
+}
+
 const app = new Elysia({ prefix: "/api" })
   .use(cors({ origin: WEB_ORIGIN, credentials: true }))
   .use(auth)
@@ -80,6 +118,11 @@ const app = new Elysia({ prefix: "/api" })
   // --- Public raffle browsing ---
   // Short in-memory cache: this list feeds home/sorteos/ganadores/recargar SSR,
   // so a few seconds of staleness on ticket counts is fine and cuts TTFB.
+  // Public, cacheable (CDN), CORS:* featured/nearest open raffle. Raw values
+  // (amounts + UTC dates); the client formats. 200 with raffle:null when none.
+  .get("/public/v1/raffles/featured", ({ set }) => publicFeatured(set))
+  .get("/public/raffles/featured", ({ set }) => publicFeatured(set))
+
   .get("/raffles", async ({ set }) => {
     const cached = getRafflesCache();
     if (cached) {
