@@ -69,6 +69,9 @@ export const chat = new Elysia({ name: "chat" })
         set.status = 429;
         return { error: "too_fast" };
       }
+      // Snapshot the sender's ticket numbers in this raffle (for the live/dead
+      // badge on their messages during the show).
+      const myTickets = await db.ticket.findMany({ where: { raffleId: raffle.id, ownerId: user.id }, select: { number: true } });
       const msg = await db.chatMessage.create({
         data: {
           raffleId: raffle.id,
@@ -76,6 +79,7 @@ export const chat = new Elysia({ name: "chat" })
           nickname: user.nickname || user.name || "Anónimo",
           avatarUrl: user.avatarUrl,
           text,
+          ticketNumbers: myTickets.map((t) => t.number),
         },
       });
       return { message: msg };

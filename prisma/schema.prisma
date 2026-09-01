@@ -378,6 +378,9 @@ model ChatMessage {
   nickname  String
   avatarUrl String?
   text      String   @db.Text
+  // The sender's ticket numbers in this raffle at send time (for the live/dead
+  // badge shown next to their messages during the show).
+  ticketNumbers Int[]  @default([])
   createdAt DateTime @default(now())
 
   @@index([raffleId, createdAt])

@@ -156,7 +156,7 @@ const app = new Elysia({ prefix: "/api" })
   // Public participants: who's in, with their ticket count (no money). Shown on
   // the raffle page for transparency; links to /u/:username.
   .get("/raffles/:slug/participants", async ({ params, set }) => {
-    const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true } });
+    const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true, status: true, ticketPrice: true } });
     if (!raffle) { set.status = 404; return { error: "not_found" }; }
     const tickets = await db.ticket.findMany({
       where: { raffleId: raffle.id, ownerId: { not: null } },
@@ -168,8 +168,14 @@ const app = new Elysia({ prefix: "/api" })
       if (!e) { e = { username: t.owner?.username ?? null, nickname: t.owner?.nickname ?? null, avatarUrl: t.owner?.avatarUrl ?? null, tickets: 0 }; byUser.set(t.ownerId!, e); }
       e.tickets++;
     }
-    const participants = [...byUser.values()].sort((a, b) => b.tickets - a.tickets);
-    return { count: participants.length, totalTickets: tickets.length, participants };
+    // Paid raffles hide HOW MANY each person holds until the draw starts: you see
+    // WHO is in, not how many (so nobody reads others' odds). Free raffles keep
+    // counts; once DRAWN everything is revealed in the show.
+    const hideCounts = raffle.ticketPrice > 0 && raffle.status !== "DRAWN" && raffle.status !== "DRAWING";
+    const participants = hideCounts
+      ? [...byUser.values()].sort((a, b) => (a.nickname ?? a.username ?? "").localeCompare(b.nickname ?? b.username ?? "")).map(({ tickets, ...rest }) => ({ ...rest, tickets: null as number | null }))
+      : [...byUser.values()].sort((a, b) => b.tickets - a.tickets).map((e) => ({ ...e, tickets: e.tickets as number | null }));
+    return { count: byUser.size, totalTickets: tickets.length, hideCounts, participants };
   })
 
   // The generated live show + canonical participants (for animation + replay).
