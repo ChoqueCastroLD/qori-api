@@ -314,7 +314,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   .post("/winners/notify", async ({ query }) => {
     const dryRun = query.dryRun === "1" || query.dryRun === "true";
     const winners = await db.winner.findMany({
-      where: { notifiedAt: null, userId: { not: null }, raffle: { legacy: false } },
+      where: { notifiedAt: null, prizeStatus: { not: "DELIVERED" }, userId: { not: null }, raffle: { legacy: false } },
       include: { raffle: { select: { title: true, slug: true, prizeValue: true } }, ticket: { select: { number: true } }, user: { select: { email: true } } },
     });
     const targets = winners.filter((w) => w.user?.email);
