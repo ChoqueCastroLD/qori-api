@@ -245,7 +245,7 @@ const app = new Elysia({ prefix: "/api" })
       boughtAt: t.createdAt,
     }));
     return {
-      raffle: { slug: raffle.slug, title: raffle.title, winnersCount: raffle.winnersCount },
+      raffle: { slug: raffle.slug, title: raffle.title, winnersCount: raffle.winnersCount, ticketPrice: raffle.ticketPrice },
       show: raffle.show.stages,
       participants,
       startsAt: raffle.show.startsAt,
