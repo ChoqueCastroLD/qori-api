@@ -333,8 +333,8 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   // the recipient count without sending.
   .post("/promo-email/send", async ({ query }) => {
     const dryRun = query.dryRun === "1" || query.dryRun === "true";
-    const users = await db.user.findMany({ where: { email: { not: null } }, select: { email: true } });
-    const emails = [...new Set(users.map((u) => u.email!).filter(Boolean))];
+    const users = await db.user.findMany({ select: { email: true } });
+    const emails = [...new Set(users.map((u) => u.email).filter((e): e is string => !!e))];
     if (dryRun) return { dryRun: true, count: emails.length };
     const mail = promoDuplicaEmail();
     let sent = 0;
