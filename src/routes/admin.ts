@@ -530,6 +530,48 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     };
   })
 
+  // Growth dashboard: acquisition + retention funnel. Answers "are we getting
+  // people, do they buy, do they come back?" so loss-leader raffles can be
+  // judged on repeat-recharge, not vanity ticket counts.
+  .get("/growth", async () => {
+    const now = Date.now();
+    const since = new Date(now - 30 * 86400000);
+    const [totalUsers, recentUsers, ordersBy, topupsBy] = await Promise.all([
+      db.user.count(),
+      db.user.findMany({ where: { createdAt: { gte: since } }, select: { createdAt: true } }),
+      db.order.groupBy({ by: ["userId"], where: { status: "CONFIRMED" }, _count: { _all: true } }),
+      db.topUp.groupBy({ by: ["userId"], where: { status: "PAID" }, _count: { _all: true }, _sum: { amountUsd: true } }),
+    ]);
+    // New users per day over the last 30 days, zero-filled so the chart is continuous.
+    const byDay = new Map<string, number>();
+    for (const u of recentUsers) {
+      const d = u.createdAt.toISOString().slice(0, 10);
+      byDay.set(d, (byDay.get(d) ?? 0) + 1);
+    }
+    const newUsersByDay: { date: string; count: number }[] = [];
+    for (let i = 29; i >= 0; i--) {
+      const d = new Date(now - i * 86400000).toISOString().slice(0, 10);
+      newUsersByDay.push({ date: d, count: byDay.get(d) ?? 0 });
+    }
+    const buyers = ordersBy.length; // distinct users who ever took a ticket
+    const rechargers = topupsBy.length; // distinct users who ever paid real money
+    const repeatRechargers = topupsBy.filter((t) => t._count._all >= 2).length;
+    const revenueUsd = topupsBy.reduce((s, t) => s + (t._sum.amountUsd ?? 0), 0) / 100;
+    return {
+      totalUsers,
+      newLast30: recentUsers.length,
+      buyers,
+      rechargers,
+      repeatRechargers,
+      revenueUsd,
+      conv: {
+        registeredToRecharged: totalUsers ? rechargers / totalUsers : 0,
+        rechargedToRepeat: rechargers ? repeatRechargers / rechargers : 0,
+      },
+      newUsersByDay,
+    };
+  })
+
   // Users list with activity + moderation flags (aggregated in a few queries).
   .get("/users", async () => {
     const users = await db.user.findMany({ orderBy: { createdAt: "desc" }, take: 500 });
