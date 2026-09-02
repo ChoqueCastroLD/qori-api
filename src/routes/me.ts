@@ -25,13 +25,15 @@ const LINGOTES_PER_USD = 10;
 // once it ends the bonus follows a growing curve: 5% at $10, +3% per tier ($20
 // 8%, $50 11%, $100 14%, $500 17%; $5 has no bonus). Enforced server-side.
 const PKG_PCT: Record<number, number> = { 500: 0, 1000: 0.05, 2000: 0.08, 5000: 0.11, 10000: 0.14, 50000: 0.17 };
-const BONUS_DEADLINE = Date.parse("2026-09-16T04:59:59Z"); // fin de la promo 2x1 (hora Perú)
+const PROMO_2X_END = Date.parse("2026-09-05T04:59:59Z"); // 2x1: hasta vie 4-set 23:59 (Perú)
+const CURVE_END = Date.parse("2026-09-25T04:59:59Z"); // curva creciente: hasta 24-set 23:59 (Perú)
 
 function packageFor(amountUsd: number): { base: number; bonus: number; total: number; promo: boolean } | null {
   if (PKG_PCT[amountUsd] === undefined) return null;
   const base = Math.round((amountUsd / 100) * LINGOTES_PER_USD);
-  const promo = Date.now() < BONUS_DEADLINE;
-  const bonus = promo ? base : Math.round(base * PKG_PCT[amountUsd]);
+  const now = Date.now();
+  const promo = now < PROMO_2X_END; // 2x1 para todos
+  const bonus = promo ? base : (now < CURVE_END ? Math.round(base * PKG_PCT[amountUsd]) : 0);
   return { base, bonus, total: base + bonus, promo };
 }
 
@@ -377,8 +379,8 @@ export const me = new Elysia({ name: "me" })
   .get("/topups/packages", () => {
     const amounts = [500, 1000, 2000, 5000, 10000, 50000];
     return {
-      promo: Date.now() < BONUS_DEADLINE,
-      promoEndsAt: new Date(BONUS_DEADLINE).toISOString(),
+      promo: Date.now() < PROMO_2X_END,
+      promoEndsAt: new Date(PROMO_2X_END).toISOString(),
       packages: amounts.map((a) => { const p = packageFor(a)!; return { amountUsd: a, base: p.base, bonus: p.bonus, total: p.total }; }),
     };
   })

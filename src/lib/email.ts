@@ -183,6 +183,29 @@ export function postponedEmail(raffleTitle: string, slug: string, newDate: strin
   };
 }
 
+// Promo "duplica tus tickets" (2x). Do NOT mention the later growing curve.
+export function promoDuplicaEmail(): { subject: string; html: string } {
+  const raffles = [
+    { title: "Sorteo GTA 6 Ultimate Edition", slug: "primer-sorteo-gta-6-ultimate-edition" },
+    { title: "Sorteo PS5 (setiembre)", slug: "ps5-setiembre" },
+  ];
+  const list = raffles.map((r) => `<li style="margin:6px 0"><a href="${WEB_ORIGIN}/sorteos/${r.slug}" style="color:#059669;font-weight:600;text-decoration:none">${r.title}</a></li>`).join("");
+  return {
+    subject: "Duplica tus tickets: recibe el DOBLE de lingotes (solo hasta el viernes)",
+    html: template({
+      heading: "Duplica tus tickets",
+      body:
+        `Gracias a todos los que están comprando tickets. Por tiempo limitado <strong>duplicamos todos los lingotes que recargues</strong>: recibes el <strong>DOBLE</strong>, así que puedes comprar el doble de tickets.` +
+        `<br><br><strong>Solo hasta el viernes 4 de setiembre, 23:59.</strong>` +
+        `<br><br>Aprovecha para anotarte a los sorteos activos:` +
+        `<ul style="padding-left:18px;margin:8px 0">${list}</ul>` +
+        `¿Aún no has comprado? Recarga ahora y llévate el doble de lingotes.`,
+      cta: { label: "Recargar y participar", url: `${WEB_ORIGIN}/recargar` },
+      footnote: "Promo por tiempo limitado. Juega con responsabilidad. Solo mayores de 18 años.",
+    }),
+  };
+}
+
 export function winnerEmail(raffleTitle: string, ticketNumber: number, slug: string): { subject: string; html: string } {
   return {
     subject: `¡Ganaste ${raffleTitle}!`,

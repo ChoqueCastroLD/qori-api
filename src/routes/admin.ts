@@ -7,7 +7,7 @@ import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from ".
 import { getPayment } from "../lib/mercadopago";
 import { getOrderBreakdown } from "../lib/paypal";
 import { bustRafflesCache } from "../lib/rafflesCache";
-import { sendEmail, prizeClaimEmail } from "../lib/email";
+import { sendEmail, prizeClaimEmail, promoDuplicaEmail } from "../lib/email";
 import { newClaimCode } from "../lib/claim";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
@@ -329,6 +329,17 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     }
     return { ok: true, sent: results.filter((r) => r.ok).length, attempted: results.length, results };
   })
+  // Send the "duplica tus tickets" promo email to one address (draft/preview).
+  .post(
+    "/promo-email/test",
+    async ({ body, set }) => {
+      const email = (body.email || "").trim();
+      if (!email) { set.status = 422; return { error: "email_required" }; }
+      const ok = await sendEmail({ to: email, ...promoDuplicaEmail() }).catch(() => false);
+      return { ok: !!ok, sentTo: email };
+    },
+    { body: t.Object({ email: t.String() }) },
+  )
   // Send a SAMPLE claim email to any address (to preview the design).
   .post(
     "/winners/test-email",
