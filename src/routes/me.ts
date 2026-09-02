@@ -125,7 +125,7 @@ export const me = new Elysia({ name: "me" })
   .get("/u/:username", async ({ params, set }) => {
     const u = await db.user.findUnique({ where: { username: params.username.toLowerCase() } });
     if (!u) { set.status = 404; return { error: "not_found" }; }
-    const [ticketsTotal, winsCount, orders, activities] = await Promise.all([
+    const [ticketsTotal, winsCount, orders, activities, suertudo] = await Promise.all([
       db.ticket.count({ where: { ownerId: u.id } }),
       db.winner.count({ where: { userId: u.id } }),
       db.order.findMany({
@@ -134,6 +134,7 @@ export const me = new Elysia({ name: "me" })
         orderBy: { createdAt: "desc" }, take: 60,
       }),
       db.activity.findMany({ where: { userId: u.id }, orderBy: { createdAt: "desc" }, take: 60 }),
+      db.topUp.count({ where: { userId: u.id, status: "PAID" } }).then((n) => n > 0),
     ]);
     const feed = [
       ...orders.map((o) => ({
@@ -145,7 +146,7 @@ export const me = new Elysia({ name: "me" })
     return {
       profile: {
         username: u.username, nickname: u.nickname, avatarUrl: u.avatarUrl,
-        country: u.country, createdAt: u.createdAt, ticketsTotal, winsCount,
+        country: u.country, createdAt: u.createdAt, ticketsTotal, winsCount, suertudo,
       },
       feed,
     };

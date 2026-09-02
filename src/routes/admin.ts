@@ -347,6 +347,25 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     },
     { body: t.Object({ lingotes: t.Integer({ minimum: 1, maximum: 100000 }) }) },
   )
+
+  // Set a user's lingote balance to an exact value (manual correction). Applies
+  // the difference as a ledger ADJUSTMENT so the balance stays auditable.
+  .post(
+    "/set-balance",
+    async ({ body, set }) => {
+      const u = await db.user.findUnique({ where: { username: body.username.toLowerCase() }, select: { id: true, balance: true } });
+      if (!u) { set.status = 404; return { error: "not_found" }; }
+      const delta = body.lingotes - u.balance;
+      if (delta !== 0) {
+        await db.$transaction(async (tx) => {
+          await applyLedger(tx, { userId: u.id, amount: delta, type: "ADJUSTMENT", refType: "admin_set_balance", memo: `Ajuste manual de saldo a ${body.lingotes}` });
+        });
+      }
+      const after = await db.user.findUnique({ where: { id: u.id }, select: { balance: true } });
+      return { ok: true, before: u.balance, after: after?.balance ?? body.lingotes };
+    },
+    { body: t.Object({ username: t.String(), lingotes: t.Integer({ minimum: 0, maximum: 10000000 }) }) },
+  )
   // Backfill: email past winners (platform account, non-legacy, not yet notified)
   // their claim code. `?dryRun=1` previews recipients without sending.
   .post("/winners/notify", async ({ query }) => {

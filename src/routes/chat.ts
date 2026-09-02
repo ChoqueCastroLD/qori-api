@@ -1,6 +1,7 @@
 import { Elysia, t } from "elysia";
 import { db } from "../db";
 import { withUser } from "./auth";
+import { suertudoSet, isSuertudo } from "../lib/suertudo";
 
 const CHAT_GRACE_MS = 5 * 60 * 1000; // chat stays open 5 min after the draw
 
@@ -35,7 +36,9 @@ export const chat = new Elysia({ name: "chat" })
       });
       // Chat closes 5 min after the raffle is drawn (then it's read-only history).
       const closesAt = raffle.status === "DRAWN" && raffle.drawnAt ? new Date(raffle.drawnAt.getTime() + CHAT_GRACE_MS) : null;
-      return { messages: messages.reverse(), closesAt: closesAt ? closesAt.toISOString() : null, closed: !!closesAt && Date.now() > closesAt.getTime() };
+      const lucky = await suertudoSet(messages.map((m) => m.userId));
+      const withSuertudo = messages.reverse().map((m) => ({ ...m, suertudo: lucky.has(m.userId) }));
+      return { messages: withSuertudo, closesAt: closesAt ? closesAt.toISOString() : null, closed: !!closesAt && Date.now() > closesAt.getTime() };
     },
     { query: t.Object({ after: t.Optional(t.String()) }) },
   )
@@ -82,7 +85,7 @@ export const chat = new Elysia({ name: "chat" })
           ticketNumbers: myTickets.map((t) => t.number),
         },
       });
-      return { message: msg };
+      return { message: { ...msg, suertudo: await isSuertudo(user.id) } };
     },
     { body: t.Object({ text: t.String({ minLength: 1, maxLength: 300 }) }) },
   );

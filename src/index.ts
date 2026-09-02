@@ -4,6 +4,7 @@ import { hmacSha256Hex, sha256Hex, verifyDraw } from "./fair";
 import { generateShow, generateShowV2, type GameType } from "./show";
 import { db } from "./db";
 import { getRafflesCache, setRafflesCache } from "./lib/rafflesCache";
+import { suertudoSet } from "./lib/suertudo";
 import { addSocket, removeSocket } from "./lib/liveRaffles";
 import { auth } from "./routes/auth";
 import { me } from "./routes/me";
@@ -126,6 +127,22 @@ const app = new Elysia({ prefix: "/api" })
   .get("/public/v1/raffles/featured", ({ set }) => publicFeatured(set))
   .get("/public/raffles/featured", ({ set }) => publicFeatured(set))
 
+  // Top Suertudos: users who bought lingotes with real money, ranked by their
+  // current lingote balance. Powers the landing leaderboard.
+  .get("/suertudos/top", async ({ set }) => {
+    set.headers["cache-control"] = "public, max-age=60, s-maxage=60";
+    const paid = await db.topUp.findMany({ where: { status: "PAID" }, distinct: ["userId"], select: { userId: true } });
+    const ids = paid.map((p) => p.userId);
+    if (ids.length === 0) return { suertudos: [] };
+    const top = await db.user.findMany({
+      where: { id: { in: ids } },
+      orderBy: { balance: "desc" },
+      take: 10,
+      select: { username: true, nickname: true, avatarUrl: true, balance: true },
+    });
+    return { suertudos: top.map((u, i) => ({ rank: i + 1, username: u.username, nickname: u.nickname, avatarUrl: u.avatarUrl, lingotes: u.balance })) };
+  })
+
   .get("/raffles", async ({ set }) => {
     const cached = getRafflesCache();
     if (cached) {
@@ -187,6 +204,7 @@ const app = new Elysia({ prefix: "/api" })
       const startsAt = new Date(raffle.show.startsAt).getTime();
       show = { startsAt: raffle.show.startsAt.toISOString(), endsAt: new Date(startsAt + dur + 2000).toISOString() };
     }
+    const luckyWinners = await suertudoSet(raffle.winners.map((w) => w.user?.id));
     return {
       ...publicRaffle(raffle),
       show,
@@ -195,6 +213,8 @@ const app = new Elysia({ prefix: "/api" })
         ticketNumber: w.ticket.number,
         nickname: w.user?.nickname ?? w.name ?? null,
         avatarUrl: w.user?.avatarUrl ?? null,
+        username: w.user?.username ?? null,
+        suertudo: w.user?.id ? luckyWinners.has(w.user.id) : false,
       })),
     };
   })
@@ -208,19 +228,21 @@ const app = new Elysia({ prefix: "/api" })
       where: { raffleId: raffle.id, ownerId: { not: null } },
       select: { ownerId: true, owner: { select: { username: true, nickname: true, avatarUrl: true } } },
     });
-    const byUser = new Map<string, { username: string | null; nickname: string | null; avatarUrl: string | null; tickets: number }>();
+    const byUser = new Map<string, { userId: string; username: string | null; nickname: string | null; avatarUrl: string | null; tickets: number }>();
     for (const t of tickets) {
       let e = byUser.get(t.ownerId!);
-      if (!e) { e = { username: t.owner?.username ?? null, nickname: t.owner?.nickname ?? null, avatarUrl: t.owner?.avatarUrl ?? null, tickets: 0 }; byUser.set(t.ownerId!, e); }
+      if (!e) { e = { userId: t.ownerId!, username: t.owner?.username ?? null, nickname: t.owner?.nickname ?? null, avatarUrl: t.owner?.avatarUrl ?? null, tickets: 0 }; byUser.set(t.ownerId!, e); }
       e.tickets++;
     }
+    const lucky = await suertudoSet([...byUser.keys()]);
+    for (const e of byUser.values()) (e as any).suertudo = lucky.has(e.userId);
     // Paid raffles hide HOW MANY each person holds until the draw starts: you see
     // WHO is in, not how many (so nobody reads others' odds). Free raffles keep
     // counts; once DRAWN everything is revealed in the show.
     const hideCounts = raffle.ticketPrice > 0 && raffle.status !== "DRAWN" && raffle.status !== "DRAWING";
     const participants = hideCounts
-      ? [...byUser.values()].sort((a, b) => (a.nickname ?? a.username ?? "").localeCompare(b.nickname ?? b.username ?? "")).map(({ tickets, ...rest }) => ({ ...rest, tickets: null as number | null }))
-      : [...byUser.values()].sort((a, b) => b.tickets - a.tickets).map((e) => ({ ...e, tickets: e.tickets as number | null }));
+      ? [...byUser.values()].sort((a, b) => (a.nickname ?? a.username ?? "").localeCompare(b.nickname ?? b.username ?? "")).map(({ userId, tickets, ...rest }) => ({ ...rest, tickets: null as number | null }))
+      : [...byUser.values()].sort((a, b) => b.tickets - a.tickets).map(({ userId, ...e }) => ({ ...e, tickets: e.tickets as number | null }));
     return { count: byUser.size, totalTickets: tickets.length, hideCounts, participants };
   })
 
