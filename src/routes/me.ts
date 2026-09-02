@@ -24,7 +24,7 @@ const LINGOTES_PER_USD = 10;
 // package is DOUBLED (100% bonus) for everyone (uniform, so not exploitable);
 // once it ends the bonus follows a growing curve: 5% at $10, +3% per tier ($20
 // 8%, $50 11%, $100 14%, $500 17%; $5 has no bonus). Enforced server-side.
-const PKG_PCT: Record<number, number> = { 500: 0, 1000: 0.05, 2000: 0.08, 5000: 0.11, 10000: 0.14, 50000: 0.17 };
+const PKG_PCT: Record<number, number> = { 100: 0, 500: 0, 1000: 0.05, 2000: 0.08, 5000: 0.11, 10000: 0.14, 50000: 0.17 };
 const PROMO_2X_END = Date.parse("2026-09-05T04:59:59Z"); // 2x1: hasta vie 4-set 23:59 (Perú)
 const CURVE_END = Date.parse("2026-09-25T04:59:59Z"); // curva creciente: hasta 24-set 23:59 (Perú)
 
@@ -377,7 +377,7 @@ export const me = new Elysia({ name: "me" })
   // --- Top-ups (recharge lingotes with real money) ---
   // Current packages with their bonus (promo 2x or the post-promo curve).
   .get("/topups/packages", () => {
-    const amounts = [500, 1000, 2000, 5000, 10000, 50000];
+    const amounts = [100, 500, 1000, 2000, 5000, 10000, 50000];
     return {
       promo: Date.now() < PROMO_2X_END,
       promoEndsAt: new Date(PROMO_2X_END).toISOString(),
