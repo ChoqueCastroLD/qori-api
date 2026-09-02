@@ -235,6 +235,9 @@ model Raffle {
   minTickets       Int @default(1) // below this at draw time → refund/cancel
   maxTicketsPerUser Int? // anti-hoarding; null = unlimited
   winnersCount     Int @default(1)
+  // Exclusive raffle: only users who have spent real money (>=1 PAID top-up)
+  // can enter. Keeps out freeloaders / free-ticket-only accounts.
+  paidOnly    Boolean      @default(false)
   status      RaffleStatus @default(DRAFT)
   // Historical raffle done manually before the platform → not provably-fair.
   legacy      Boolean      @default(false)

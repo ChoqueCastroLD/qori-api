@@ -68,6 +68,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
           minTickets: body.minTickets ?? 1,
           maxTicketsPerUser: body.maxTicketsPerUser ?? null,
           winnersCount: body.winnersCount ?? 1,
+          paidOnly: body.paidOnly ?? false,
           games: games as any,
           finale: finale as any,
           showVersion: 2, // new raffles use the per-game sim engine
@@ -94,6 +95,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         minTickets: t.Optional(t.Integer({ minimum: 0 })),
         maxTicketsPerUser: t.Optional(t.Integer({ minimum: 1 })),
         winnersCount: t.Optional(t.Integer({ minimum: 1 })),
+        paidOnly: t.Optional(t.Boolean()),
         games: t.Optional(t.Array(t.String())),
         finale: t.Optional(t.String()),
         closesAt: t.Optional(t.String()),
@@ -236,6 +238,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         if (body.minTickets !== undefined) data.minTickets = body.minTickets;
         if (body.maxTicketsPerUser !== undefined) data.maxTicketsPerUser = body.maxTicketsPerUser;
         if (body.winnersCount !== undefined) data.winnersCount = body.winnersCount;
+        if (body.paidOnly !== undefined) data.paidOnly = body.paidOnly;
         if (body.games !== undefined) data.games = body.games as any;
         if (body.finale !== undefined) data.finale = (body.finale || null) as any;
         if (body.status !== undefined) data.status = body.status as any;
@@ -256,6 +259,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         minTickets: t.Optional(t.Integer({ minimum: 0 })),
         maxTicketsPerUser: t.Optional(t.Integer({ minimum: 1 })),
         winnersCount: t.Optional(t.Integer({ minimum: 1 })),
+        paidOnly: t.Optional(t.Boolean()),
         games: t.Optional(t.Array(t.String())),
         finale: t.Optional(t.String()),
         status: t.Optional(t.String()),

@@ -32,6 +32,7 @@ function publicRaffle(r: any) {
     minTickets: r.minTickets,
     maxTicketsPerUser: r.maxTicketsPerUser,
     winnersCount: r.winnersCount,
+    paidOnly: r.paidOnly ?? false,
     games: r.games,
     finale: r.finale,
     status: r.status,

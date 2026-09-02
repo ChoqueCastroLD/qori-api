@@ -190,7 +190,9 @@ export const me = new Elysia({ name: "me" })
       include: { raffle: { select: { slug: true, title: true, status: true, images: true } }, win: true },
       orderBy: { createdAt: "desc" },
     });
-    return { tickets };
+    // hasPaid: used to gate "solo compradores" raffles (paidOnly) in the UI.
+    const paidTopups = await db.topUp.count({ where: { userId: user.id, status: "PAID" } });
+    return { tickets, hasPaid: paidTopups > 0 };
   })
 
   // My prizes: raffles I won, with the private claim code (only the owner sees it).
@@ -248,6 +250,12 @@ export const me = new Elysia({ name: "me" })
           if (raffle.maxTicketsPerUser) {
             const mine = await tx.ticket.count({ where: { raffleId: raffle.id, ownerId: user.id } });
             if (mine + quantity > raffle.maxTicketsPerUser) throw new Error("per_user_limit");
+          }
+
+          // Exclusive raffle: require at least one real-money top-up.
+          if (raffle.paidOnly) {
+            const paid = await tx.topUp.count({ where: { userId: user.id, status: "PAID" } });
+            if (paid === 0) throw new Error("requires_paid_user");
           }
 
           const cost = raffle.ticketPrice * quantity;
@@ -357,6 +365,7 @@ export const me = new Elysia({ name: "me" })
           "buy_disabled",
           "sold_out",
           "per_user_limit",
+          "requires_paid_user",
           "could_not_assign",
         ];
         if (known.includes(e?.message)) {
