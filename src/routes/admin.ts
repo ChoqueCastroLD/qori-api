@@ -10,6 +10,7 @@ import { bustRafflesCache } from "../lib/rafflesCache";
 import { sendEmail, prizeClaimEmail, promoDuplicaEmail } from "../lib/email";
 import { newClaimCode } from "../lib/claim";
 import { creditTopupIfPending } from "../lib/topups";
+import { applyLedger } from "../lib/wallet";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
@@ -313,6 +314,38 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       return { ok: true, prizeStatus: status };
     },
     { body: t.Object({ prizeStatus: t.String() }) },
+  )
+
+  // Deliver a lingote prize to a winner: credit their balance and mark the
+  // prize DELIVERED, atomically. Idempotent - a second call for the same winner
+  // does not double-credit (guards on an existing ledger entry).
+  .post(
+    "/winners/:id/deliver-lingotes",
+    async ({ params, body, set }) => {
+      const w = await db.winner.findUnique({ where: { id: params.id } });
+      if (!w) { set.status = 404; return { error: "not_found" }; }
+      if (!w.userId) { set.status = 422; return { error: "no_user" }; }
+      const existing = await db.ledgerEntry.findFirst({ where: { refType: "winner_prize", refId: w.id } });
+      if (existing) {
+        if (w.prizeStatus !== "DELIVERED") {
+          await db.winner.update({ where: { id: w.id }, data: { prizeStatus: "DELIVERED", deliveredAt: w.deliveredAt ?? new Date() } });
+        }
+        return { ok: true, already: true, lingotes: existing.amount };
+      }
+      await db.$transaction(async (tx) => {
+        await applyLedger(tx, {
+          userId: w.userId!,
+          amount: body.lingotes,
+          type: "ADJUSTMENT",
+          refType: "winner_prize",
+          refId: w.id,
+          memo: `Premio del sorteo (${body.lingotes} lingote${body.lingotes === 1 ? "" : "s"})`,
+        });
+        await tx.winner.update({ where: { id: w.id }, data: { prizeStatus: "DELIVERED", deliveredAt: new Date() } });
+      });
+      return { ok: true, credited: body.lingotes };
+    },
+    { body: t.Object({ lingotes: t.Integer({ minimum: 1, maximum: 100000 }) }) },
   )
   // Backfill: email past winners (platform account, non-legacy, not yet notified)
   // their claim code. `?dryRun=1` previews recipients without sending.
