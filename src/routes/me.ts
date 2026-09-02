@@ -20,10 +20,20 @@ const RESERVED_USERNAMES = new Set([
 /** 1 USD = 10 lingotes (fixed). */
 const LINGOTES_PER_USD = 10;
 
-// Fixed recharge packages (USD cents → bonus lingotes). Bonuses are a
-// limited-time promo enforced server-side (never trust the client).
-const PKG_BONUS: Record<number, number> = { 500: 0, 1000: 10, 2000: 20, 5000: 30, 10000: 100, 50000: 500 };
-const BONUS_DEADLINE = Date.parse("2026-09-16T04:59:59Z"); // hasta 15-set-2026 (hora Perú)
+// Recharge packages (USD cents). During the "duplica tus tickets" promo EVERY
+// package is DOUBLED (100% bonus) for everyone (uniform, so not exploitable);
+// once it ends the bonus follows a growing curve: 5% at $10, +3% per tier ($20
+// 8%, $50 11%, $100 14%, $500 17%; $5 has no bonus). Enforced server-side.
+const PKG_PCT: Record<number, number> = { 500: 0, 1000: 0.05, 2000: 0.08, 5000: 0.11, 10000: 0.14, 50000: 0.17 };
+const BONUS_DEADLINE = Date.parse("2026-09-16T04:59:59Z"); // fin de la promo 2x1 (hora Perú)
+
+function packageFor(amountUsd: number): { base: number; bonus: number; total: number; promo: boolean } | null {
+  if (PKG_PCT[amountUsd] === undefined) return null;
+  const base = Math.round((amountUsd / 100) * LINGOTES_PER_USD);
+  const promo = Date.now() < BONUS_DEADLINE;
+  const bonus = promo ? base : Math.round(base * PKG_PCT[amountUsd]);
+  return { base, bonus, total: base + bonus, promo };
+}
 
 function requireUser(user: User | null, set: any): user is User {
   if (!user) {
@@ -363,18 +373,26 @@ export const me = new Elysia({ name: "me" })
   )
 
   // --- Top-ups (recharge lingotes with real money) ---
+  // Current packages with their bonus (promo 2x or the post-promo curve).
+  .get("/topups/packages", () => {
+    const amounts = [500, 1000, 2000, 5000, 10000, 50000];
+    return {
+      promo: Date.now() < BONUS_DEADLINE,
+      promoEndsAt: new Date(BONUS_DEADLINE).toISOString(),
+      packages: amounts.map((a) => { const p = packageFor(a)!; return { amountUsd: a, base: p.base, bonus: p.bonus, total: p.total }; }),
+    };
+  })
   .post(
     "/topups",
     async ({ user, body, set }) => {
       if (!requireUser(user, set)) return { error: "unauthenticated" };
-      // Only allow the fixed packages.
-      const bonus = PKG_BONUS[body.amountUsd];
-      if (bonus === undefined) {
+      // Only allow the fixed packages; bonus computed server-side.
+      const pkg = packageFor(body.amountUsd);
+      if (!pkg) {
         set.status = 422;
         return { error: "invalid_package" };
       }
-      const base = Math.round((body.amountUsd / 100) * LINGOTES_PER_USD);
-      const lingotes = base + (Date.now() < BONUS_DEADLINE ? bonus : 0);
+      const lingotes = pkg.total;
       const topup = await db.topUp.create({
         data: {
           userId: user.id,
