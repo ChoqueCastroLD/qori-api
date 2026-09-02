@@ -332,10 +332,11 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   // Broadcast the promo email to ALL users with an email. `?dryRun=1` previews
   // the recipient count without sending.
   .post("/promo-email/send", async ({ query }) => {
-    const dryRun = query.dryRun === "1" || query.dryRun === "true";
     const users = await db.user.findMany({ select: { email: true } });
     const emails = [...new Set(users.map((u) => u.email).filter((e): e is string => !!e))];
-    if (dryRun) return { dryRun: true, count: emails.length };
+    // Safety: this is a mass outbound blast. Only send with ?confirm=SEND; any
+    // other call (incl. ?dryRun=1) just returns the recipient count.
+    if (query.confirm !== "SEND") return { dryRun: true, count: emails.length };
     const mail = promoDuplicaEmail();
     let sent = 0;
     for (const email of emails) { const ok = await sendEmail({ to: email, ...mail }).catch(() => false); if (ok) sent++; }
