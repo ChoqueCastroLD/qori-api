@@ -329,6 +329,18 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     }
     return { ok: true, sent: results.filter((r) => r.ok).length, attempted: results.length, results };
   })
+  // Broadcast the promo email to ALL users with an email. `?dryRun=1` previews
+  // the recipient count without sending.
+  .post("/promo-email/send", async ({ query }) => {
+    const dryRun = query.dryRun === "1" || query.dryRun === "true";
+    const users = await db.user.findMany({ where: { email: { not: null } }, select: { email: true } });
+    const emails = [...new Set(users.map((u) => u.email!).filter(Boolean))];
+    if (dryRun) return { dryRun: true, count: emails.length };
+    const mail = promoDuplicaEmail();
+    let sent = 0;
+    for (const email of emails) { const ok = await sendEmail({ to: email, ...mail }).catch(() => false); if (ok) sent++; }
+    return { ok: true, sent, total: emails.length };
+  })
   // Send the "duplica tus tickets" promo email to one address (draft/preview).
   .post(
     "/promo-email/test",
