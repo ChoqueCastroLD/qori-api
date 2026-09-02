@@ -337,7 +337,7 @@ export const auth = new Elysia({ name: "auth" })
   })
 
   // --- Google OAuth: start ---
-  .get("/auth/google", ({ cookie, set }) => {
+  .get("/auth/google", ({ cookie, set, query }) => {
     const clientId = process.env.GOOGLE_CLIENT_ID;
     const redirectUri = process.env.GOOGLE_REDIRECT_URI;
     if (!clientId || !redirectUri) {
@@ -346,6 +346,11 @@ export const auth = new Elysia({ name: "auth" })
       set.status = 302; set.headers.location = `${WEB_ORIGIN}/entrar?oauth=unavailable`;
       return;
     }
+    // Carry the referral code (if the visitor arrived via ?ref=CODE) through the
+    // OAuth round-trip so Google sign-ups also credit the referrer.
+    const ref = (query.ref ?? "").trim().toUpperCase().slice(0, 32);
+    if (ref) cookie["qori_oauth_ref"].set({ value: ref, httpOnly: true, secure: isProd, sameSite: "lax", path: "/", maxAge: 600 });
+    else cookie["qori_oauth_ref"].remove();
     const state = crypto.randomUUID();
     cookie["qori_oauth_state"].set({
       value: state,
@@ -362,7 +367,7 @@ export const auth = new Elysia({ name: "auth" })
     url.searchParams.set("scope", "openid email profile");
     url.searchParams.set("state", state);
     set.status = 302; set.headers.location = url.toString();
-  })
+  }, { query: t.Object({ ref: t.Optional(t.String()) }) })
 
   // --- Google OAuth: callback ---
   .get(
@@ -424,6 +429,13 @@ export const auth = new Elysia({ name: "auth" })
         const email = profile.email.trim().toLowerCase();
         let u = await tx.user.findUnique({ where: { email } });
         if (!u) {
+          // Credit the referrer if this new account arrived via a ?ref=CODE link.
+          const refCode = (cookie["qori_oauth_ref"]?.value ?? "").trim().toUpperCase();
+          let referredById: string | null = null;
+          if (refCode) {
+            const referrer = await tx.user.findUnique({ where: { referralCode: refCode }, select: { id: true } });
+            if (referrer) referredById = referrer.id;
+          }
           u = await tx.user.create({
             data: {
               email,
@@ -432,6 +444,7 @@ export const auth = new Elysia({ name: "auth" })
               nickname: profile.name,
               avatarUrl: profile.picture,
               referralCode: await uniqueReferralCode(),
+              referredById,
             },
           });
         }
@@ -446,6 +459,7 @@ export const auth = new Elysia({ name: "auth" })
       });
       cookie[SESSION_COOKIE].set({ value: token, ...sessionCookieOpts(expiresAt) });
       cookie["qori_oauth_state"].remove();
+      cookie["qori_oauth_ref"].remove();
       // Back to the web app, now logged in.
       set.status = 302; set.headers.location = WEB_ORIGIN;
     },
