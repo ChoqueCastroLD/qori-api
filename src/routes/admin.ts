@@ -9,6 +9,7 @@ import { getOrderBreakdown } from "../lib/paypal";
 import { bustRafflesCache } from "../lib/rafflesCache";
 import { sendEmail, prizeClaimEmail, promoDuplicaEmail } from "../lib/email";
 import { newClaimCode } from "../lib/claim";
+import { creditTopupIfPending } from "../lib/topups";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 
@@ -638,6 +639,33 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       orderBy: { createdAt: "desc" },
       take: 200,
     });
+  })
+
+  // Confirm a MANUAL topup (crypto/Binance and other proof-based methods),
+  // crediting lingotes once. Never allowed for MP/PayPal (those are automatic;
+  // confirming by hand could credit an unconfirmed card payment).
+  .post("/topups/:id/confirm", async ({ params, user, set }) => {
+    const topup = await db.topUp.findUnique({ where: { id: params.id } });
+    if (!topup) { set.status = 404; return { error: "not_found" }; }
+    if (topup.status === "PAID") return { ok: true, already: true };
+    if (!["CRYPTO", "YAPE", "PLIN", "TRANSFER"].includes(topup.method)) {
+      set.status = 422;
+      return { error: "not_a_manual_method" };
+    }
+    const credited = await creditTopupIfPending(topup.id, { memoLabel: "Recarga Binance" });
+    if (credited && user?.id) {
+      await db.topUp.update({ where: { id: topup.id }, data: { confirmedById: user.id } }).catch(() => {});
+    }
+    return { ok: true, credited };
+  })
+
+  // Reject / fail a pending manual topup.
+  .post("/topups/:id/reject", async ({ params, set }) => {
+    const topup = await db.topUp.findUnique({ where: { id: params.id } });
+    if (!topup) { set.status = 404; return { error: "not_found" }; }
+    if (topup.status === "PAID") { set.status = 422; return { error: "already_paid" }; }
+    await db.topUp.update({ where: { id: params.id }, data: { status: "FAILED" } });
+    return { ok: true };
   })
 
   .get("/orders", async () => {

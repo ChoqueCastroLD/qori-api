@@ -5,6 +5,7 @@ import { publicUser, withUser } from "./auth";
 import type { User } from "@prisma/client";
 import { createPreference, mpConfigured } from "../lib/mercadopago";
 import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypal";
+import { binanceConfigured, binanceInstructions } from "../lib/binance";
 import { sendEmail, purchaseEmail } from "../lib/email";
 import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
 import { publishSold } from "../lib/liveRaffles";
@@ -435,12 +436,21 @@ export const me = new Elysia({ name: "me" })
           return { error: "paypal_error", topup };
         }
       }
+      // Manual crypto (Binance): no hosted checkout. Return the deposit
+      // instructions; the user pays and submits proof, an admin confirms.
+      if (body.method === "CRYPTO") {
+        if (!binanceConfigured()) {
+          set.status = 503;
+          return { error: "crypto_not_configured", topup };
+        }
+        return { topup, crypto: binanceInstructions(topup.amountUsd) };
+      }
       return { topup };
     },
     {
       body: t.Object({
         amountUsd: t.Integer({ minimum: 100 }), // min $1
-        method: t.Union([t.Literal("MERCADOPAGO"), t.Literal("PAYPAL")]),
+        method: t.Union([t.Literal("MERCADOPAGO"), t.Literal("PAYPAL"), t.Literal("CRYPTO")]),
       }),
     },
   )
