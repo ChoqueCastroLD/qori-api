@@ -11,6 +11,7 @@ import { admin } from "./routes/admin";
 import { chat } from "./routes/chat";
 import { mp } from "./routes/mp";
 import { paypal } from "./routes/paypal";
+import { nowpayments } from "./routes/nowpayments";
 import { startScheduler } from "./scheduler";
 import { getRates } from "./lib/fx";
 
@@ -102,6 +103,7 @@ const app = new Elysia({ prefix: "/api" })
   .use(chat)
   .use(mp)
   .use(paypal)
+  .use(nowpayments)
   .get("/health", () => ({ ok: true, service: "qori-api" }))
 
   // WebSocket: live ticket counts. Clients update any [data-live-sold="<slug>"]

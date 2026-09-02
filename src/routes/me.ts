@@ -6,6 +6,7 @@ import type { User } from "@prisma/client";
 import { createPreference, mpConfigured } from "../lib/mercadopago";
 import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypal";
 import { binanceConfigured, binanceInstructions } from "../lib/binance";
+import { nowpaymentsConfigured, createInvoice as createCryptoInvoice } from "../lib/nowpayments";
 import { sendEmail, purchaseEmail } from "../lib/email";
 import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
 import { publishSold } from "../lib/liveRaffles";
@@ -436,14 +437,25 @@ export const me = new Elysia({ name: "me" })
           return { error: "paypal_error", topup };
         }
       }
-      // Manual crypto (Binance): no hosted checkout. Return the deposit
-      // instructions; the user pays and submits proof, an admin confirms.
       if (body.method === "CRYPTO") {
-        if (!binanceConfigured()) {
-          set.status = 503;
-          return { error: "crypto_not_configured", topup };
+        // Preferred: NOWPayments hosted checkout (auto-credited via IPN webhook).
+        if (nowpaymentsConfigured()) {
+          try {
+            const inv = await createCryptoInvoice({ topupId: topup.id, amountUsd: topup.amountUsd });
+            await db.topUp.update({ where: { id: topup.id }, data: { providerRef: inv.id } });
+            return { topup, checkoutUrl: inv.url };
+          } catch (e) {
+            console.error("nowpayments invoice error", e);
+            set.status = 502;
+            return { error: "crypto_error", topup };
+          }
         }
-        return { topup, crypto: binanceInstructions(topup.amountUsd) };
+        // Fallback: manual Binance deposit + proof (an admin confirms).
+        if (binanceConfigured()) {
+          return { topup, crypto: binanceInstructions(topup.amountUsd) };
+        }
+        set.status = 503;
+        return { error: "crypto_not_configured", topup };
       }
       return { topup };
     },
