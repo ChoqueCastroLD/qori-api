@@ -191,6 +191,7 @@ enum TopUpMethod {
   TRANSFER
   MERCADOPAGO
   CRYPTO
+  FLOW
 }
 
 enum TopUpStatus {

@@ -7,6 +7,7 @@ import { createPreference, mpConfigured } from "../lib/mercadopago";
 import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypal";
 import { binanceConfigured, binanceInstructions } from "../lib/binance";
 import { nowpaymentsConfigured, createInvoice as createCryptoInvoice } from "../lib/nowpayments";
+import { flowConfigured, createPayment as createFlowPayment } from "../lib/flow";
 import { sendEmail, purchaseEmail } from "../lib/email";
 import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
 import { publishSold } from "../lib/liveRaffles";
@@ -447,6 +448,21 @@ export const me = new Elysia({ name: "me" })
           return { error: "paypal_error", topup };
         }
       }
+      if (body.method === "FLOW") {
+        if (!flowConfigured()) {
+          set.status = 503;
+          return { error: "flow_not_configured", topup };
+        }
+        try {
+          const pay = await createFlowPayment({ topupId: topup.id, amountUsd: topup.amountUsd, lingotes, email: user.email });
+          await db.topUp.update({ where: { id: topup.id }, data: { providerRef: pay.id } });
+          return { topup, checkoutUrl: pay.url };
+        } catch (e) {
+          console.error("flow payment error", e);
+          set.status = 502;
+          return { error: "flow_error", topup };
+        }
+      }
       if (body.method === "CRYPTO") {
         // Preferred: NOWPayments hosted checkout (auto-credited via IPN webhook).
         if (nowpaymentsConfigured()) {
@@ -472,7 +488,7 @@ export const me = new Elysia({ name: "me" })
     {
       body: t.Object({
         amountUsd: t.Integer({ minimum: 100 }), // min $1
-        method: t.Union([t.Literal("MERCADOPAGO"), t.Literal("PAYPAL"), t.Literal("CRYPTO")]),
+        method: t.Union([t.Literal("MERCADOPAGO"), t.Literal("PAYPAL"), t.Literal("CRYPTO"), t.Literal("FLOW")]),
       }),
     },
   )
