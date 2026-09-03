@@ -143,6 +143,45 @@ const app = new Elysia({ prefix: "/api" })
     return { suertudos: top.map((u, i) => ({ rank: i + 1, username: u.username, nickname: u.nickname, avatarUrl: u.avatarUrl, lingotes: u.balance })) };
   })
 
+  // Public referral leaderboard: users AND affiliate brands, most referrals
+  // first, only those with >= 1 referral.
+  .get("/referrals/top", async ({ set }) => {
+    set.headers["cache-control"] = "public, max-age=60, s-maxage=60";
+    const [userRefs, affRefs] = await Promise.all([
+      db.user.groupBy({ by: ["referredById"], where: { referredById: { not: null } }, _count: { _all: true } }),
+      db.user.groupBy({ by: ["affiliateId"], where: { affiliateId: { not: null } }, _count: { _all: true } }),
+    ]);
+    const [users, affs] = await Promise.all([
+      db.user.findMany({ where: { id: { in: userRefs.map((r) => r.referredById!) } }, select: { id: true, username: true, nickname: true, avatarUrl: true } }),
+      db.affiliate.findMany({ where: { id: { in: affRefs.map((r) => r.affiliateId!) } }, select: { id: true, code: true, name: true } }),
+    ]);
+    const uMap = new Map(users.map((u) => [u.id, u]));
+    const aMap = new Map(affs.map((a) => [a.id, a]));
+    const entries = [
+      ...userRefs.map((r) => { const u = uMap.get(r.referredById!); return { type: "user" as const, count: r._count._all, username: u?.username ?? null, nickname: u?.nickname ?? null, avatarUrl: u?.avatarUrl ?? null, code: null as string | null, name: null as string | null }; }),
+      ...affRefs.map((r) => { const a = aMap.get(r.affiliateId!); return { type: "affiliate" as const, count: r._count._all, username: null, nickname: null, avatarUrl: null, code: a?.code ?? null, name: a?.name ?? null }; }),
+    ].filter((e) => e.count >= 1).sort((a, b) => b.count - a.count).slice(0, 50).map((e, i) => ({ rank: i + 1, ...e }));
+    return { top: entries };
+  })
+
+  // Look up a referral code (user or affiliate): how many it referred + who.
+  .get("/referrals/lookup", async ({ query }) => {
+    const raw = (query.code ?? "").trim();
+    if (!raw) return { found: false };
+    const listOf = (where: any) => db.user.findMany({ where, select: { username: true, nickname: true, avatarUrl: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 300 });
+    const aff = await db.affiliate.findUnique({ where: { code: raw.toLowerCase() } });
+    if (aff) {
+      const referred = await listOf({ affiliateId: aff.id });
+      return { found: true, type: "affiliate", owner: { name: aff.name, code: aff.code, avatarUrl: null, username: null }, count: referred.length, referred };
+    }
+    const u = await db.user.findUnique({ where: { referralCode: raw.toUpperCase() }, select: { id: true, username: true, nickname: true, avatarUrl: true } });
+    if (u) {
+      const referred = await listOf({ referredById: u.id });
+      return { found: true, type: "user", owner: { name: u.nickname, username: u.username, avatarUrl: u.avatarUrl, code: raw.toUpperCase() }, count: referred.length, referred };
+    }
+    return { found: false };
+  }, { query: t.Object({ code: t.Optional(t.String()) }) })
+
   .get("/raffles", async ({ set }) => {
     const cached = getRafflesCache();
     if (cached) {
