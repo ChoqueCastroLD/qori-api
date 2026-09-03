@@ -13,7 +13,7 @@ export const flow = new Elysia({ name: "flow" })
       if (token) {
         const st = await getStatus(String(token));
         if (st?.status === 2 && st.commerceOrder) {
-          await creditTopupIfPending(st.commerceOrder, { providerRef: String(token), memoLabel: "Recarga Flow" });
+          await creditTopupIfPending(st.commerceOrder, { providerRef: String(token), memoLabel: "Recarga Flow", breakdown: st.breakdown });
         }
       }
       set.status = 200; return { ok: true };

@@ -12,6 +12,7 @@ import { newClaimCode } from "../lib/claim";
 import { creditTopupIfPending } from "../lib/topups";
 import { applyLedger } from "../lib/wallet";
 import { suertudoSet } from "../lib/suertudo";
+import { getStatusByCommerce as flowStatusByCommerce } from "../lib/flow";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 // Affiliates: cash paid per VALID referral (referred user who spent real money).
@@ -729,6 +730,21 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     if (topup.status === "PAID") { set.status = 422; return { error: "already_paid" }; }
     await db.topUp.update({ where: { id: params.id }, data: { status: "FAILED" } });
     return { ok: true };
+  })
+
+  // Backfill Flow commission/net for paid Flow top-ups that were credited before
+  // fee capture (queries Flow by our commerceOrder = topup id).
+  .post("/flow/backfill-fees", async () => {
+    const topups = await db.topUp.findMany({ where: { method: "FLOW", status: "PAID", feeAmount: null }, select: { id: true } });
+    let updated = 0;
+    for (const t of topups) {
+      const st = await flowStatusByCommerce(t.id).catch(() => null);
+      if (st?.breakdown) {
+        await db.topUp.update({ where: { id: t.id }, data: { chargeCurrency: st.breakdown.chargeCurrency, grossAmount: st.breakdown.grossAmount, feeAmount: st.breakdown.feeAmount, netAmount: st.breakdown.netAmount } });
+        updated++;
+      }
+    }
+    return { ok: true, checked: topups.length, updated };
   })
 
   .get("/orders", async () => {
