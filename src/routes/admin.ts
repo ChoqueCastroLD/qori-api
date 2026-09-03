@@ -356,7 +356,11 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   .post(
     "/set-balance",
     async ({ body, set }) => {
-      const u = await db.user.findUnique({ where: { username: body.username.toLowerCase() }, select: { id: true, balance: true } });
+      const u = body.email
+        ? await db.user.findUnique({ where: { email: body.email.toLowerCase() }, select: { id: true, balance: true } })
+        : body.username
+          ? await db.user.findUnique({ where: { username: body.username.toLowerCase() }, select: { id: true, balance: true } })
+          : null;
       if (!u) { set.status = 404; return { error: "not_found" }; }
       const delta = body.lingotes - u.balance;
       if (delta !== 0) {
@@ -367,7 +371,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       const after = await db.user.findUnique({ where: { id: u.id }, select: { balance: true } });
       return { ok: true, before: u.balance, after: after?.balance ?? body.lingotes };
     },
-    { body: t.Object({ username: t.String(), lingotes: t.Integer({ minimum: 0, maximum: 10000000 }) }) },
+    { body: t.Object({ username: t.Optional(t.String()), email: t.Optional(t.String()), lingotes: t.Integer({ minimum: 0, maximum: 10000000 }) }) },
   )
   // Backfill: email past winners (platform account, non-legacy, not yet notified)
   // their claim code. `?dryRun=1` previews recipients without sending.
