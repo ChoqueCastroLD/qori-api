@@ -153,24 +153,35 @@ const app = new Elysia({ prefix: "/api" })
     return { ok: true };
   }, { body: t.Object({ code: t.String() }) })
 
-  // Public referral leaderboard: users AND affiliate brands, most referrals
-  // first, only those with >= 1 referral.
+  // Public referral leaderboard: users AND affiliate brands. Shows the funnel
+  // visitas -> registros -> referidos (a "referido" only counts once they PAY).
+  // Ranked by referidos (paid), then registros. Shows anyone with >= 1 registro.
   .get("/referrals/top", async ({ set }) => {
     set.headers["cache-control"] = "public, max-age=60, s-maxage=60";
-    const [userRefs, affRefs] = await Promise.all([
-      db.user.groupBy({ by: ["referredById"], where: { referredById: { not: null } }, _count: { _all: true } }),
-      db.user.groupBy({ by: ["affiliateId"], where: { affiliateId: { not: null } }, _count: { _all: true } }),
-    ]);
+    const refUsers = await db.user.findMany({
+      where: { OR: [{ referredById: { not: null } }, { affiliateId: { not: null } }] },
+      select: { id: true, referredById: true, affiliateId: true },
+    });
+    const paidSet = await suertudoSet(refUsers.map((u) => u.id));
+    const uReg = new Map<string, number>(), uPaid = new Map<string, number>();
+    const aReg = new Map<string, number>(), aPaid = new Map<string, number>();
+    for (const u of refUsers) {
+      if (u.referredById) { uReg.set(u.referredById, (uReg.get(u.referredById) ?? 0) + 1); if (paidSet.has(u.id)) uPaid.set(u.referredById, (uPaid.get(u.referredById) ?? 0) + 1); }
+      if (u.affiliateId) { aReg.set(u.affiliateId, (aReg.get(u.affiliateId) ?? 0) + 1); if (paidSet.has(u.id)) aPaid.set(u.affiliateId, (aPaid.get(u.affiliateId) ?? 0) + 1); }
+    }
     const [users, affs] = await Promise.all([
-      db.user.findMany({ where: { id: { in: userRefs.map((r) => r.referredById!) } }, select: { id: true, username: true, nickname: true, avatarUrl: true } }),
-      db.affiliate.findMany({ where: { id: { in: affRefs.map((r) => r.affiliateId!) } }, select: { id: true, code: true, name: true } }),
+      db.user.findMany({ where: { id: { in: [...uReg.keys()] } }, select: { id: true, username: true, nickname: true, avatarUrl: true, referralCode: true } }),
+      db.affiliate.findMany({ where: { id: { in: [...aReg.keys()] } }, select: { id: true, code: true, name: true } }),
     ]);
-    const uMap = new Map(users.map((u) => [u.id, u]));
-    const aMap = new Map(affs.map((a) => [a.id, a]));
+    const codes = [...users.map((u) => u.referralCode.toLowerCase()), ...affs.map((a) => a.code)];
+    const visitRows = codes.length ? await db.refVisit.findMany({ where: { code: { in: codes } } }) : [];
+    const vMap = new Map(visitRows.map((v) => [v.code, v.count]));
     const entries = [
-      ...userRefs.map((r) => { const u = uMap.get(r.referredById!); return { type: "user" as const, count: r._count._all, username: u?.username ?? null, nickname: u?.nickname ?? null, avatarUrl: u?.avatarUrl ?? null, code: null as string | null, name: null as string | null }; }),
-      ...affRefs.map((r) => { const a = aMap.get(r.affiliateId!); return { type: "affiliate" as const, count: r._count._all, username: null, nickname: null, avatarUrl: null, code: a?.code ?? null, name: a?.name ?? null }; }),
-    ].filter((e) => e.count >= 1).sort((a, b) => b.count - a.count).slice(0, 50).map((e, i) => ({ rank: i + 1, ...e }));
+      ...users.map((u) => ({ type: "user" as const, username: u.username, nickname: u.nickname, avatarUrl: u.avatarUrl, code: null as string | null, name: null as string | null, visitas: vMap.get(u.referralCode.toLowerCase()) ?? 0, registros: uReg.get(u.id) ?? 0, referidos: uPaid.get(u.id) ?? 0 })),
+      ...affs.map((a) => ({ type: "affiliate" as const, username: null, nickname: null, avatarUrl: null, code: a.code, name: a.name, visitas: vMap.get(a.code) ?? 0, registros: aReg.get(a.id) ?? 0, referidos: aPaid.get(a.id) ?? 0 })),
+    ].filter((e) => e.registros >= 1)
+      .sort((a, b) => b.referidos - a.referidos || b.registros - a.registros || b.visitas - a.visitas)
+      .slice(0, 50).map((e, i) => ({ rank: i + 1, ...e }));
     return { top: entries };
   })
 
@@ -191,6 +202,8 @@ const app = new Elysia({ prefix: "/api" })
       owner = { name: u.nickname, username: u.username, avatarUrl: u.avatarUrl, code: raw.toUpperCase() };
       where = { referredById: u.id };
     }
+    const visitRow = await db.refVisit.findUnique({ where: { code: raw.toLowerCase() } });
+    const visits = visitRow?.count ?? 0;
     const referred = await db.user.findMany({ where, select: { id: true, username: true, nickname: true, avatarUrl: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 500 });
     const paid = await suertudoSet(referred.map((r) => r.id));
     const strip = (u: any) => ({ username: u.username, nickname: u.nickname, avatarUrl: u.avatarUrl, createdAt: u.createdAt });
@@ -209,7 +222,7 @@ const app = new Elysia({ prefix: "/api" })
       const i = idx.get(u.createdAt.toISOString().slice(0, 10));
       if (i !== undefined) { daily[i].total++; if (paid.has(u.id)) daily[i].bought++; }
     }
-    return { found: true, type: aff ? "affiliate" : "user", owner, count: referred.length, boughtCount: bought.length, bought, notBought, daily };
+    return { found: true, type: aff ? "affiliate" : "user", owner, visits, count: referred.length, boughtCount: bought.length, bought, notBought, daily };
   }, { query: t.Object({ code: t.Optional(t.String()) }) })
 
   .get("/raffles", async ({ set }) => {

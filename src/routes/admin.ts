@@ -847,23 +847,30 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     const uv = new Map(unknownVisits.map((v) => [v.code, v.count]));
     const unknown = [...map.entries()].map(([code, e]) => ({ code, count: e.count, bought: e.bought, visits: uv.get(code) ?? 0 })).sort((a, b) => b.count - a.count);
 
-    // All codes by visits, classified (affiliate / user / unknown) + how many
-    // of those visits ended up registering. Shows clicks that never converted.
-    const allVisits = await db.refVisit.findMany({ orderBy: { count: "desc" }, take: 60 });
-    const [affCodesRows, userCodeRows, regRows] = await Promise.all([
-      db.affiliate.findMany({ where: { code: { in: allVisits.map((v) => v.code) } }, select: { code: true } }),
-      db.user.findMany({ where: { referralCode: { in: allVisits.map((v) => v.code.toUpperCase()) } }, select: { referralCode: true } }),
-      db.user.groupBy({ by: ["refCode"], where: { refCode: { in: allVisits.map((v) => v.code) } }, _count: { _all: true } }),
+    // Every code with visits, classified, with its funnel: visitas -> registros
+    // -> referidos (a referido counts only when the registered user PAID).
+    const allVisits = await db.refVisit.findMany({ take: 200 });
+    const allCodes = allVisits.map((v) => v.code);
+    const [affCodesRows, userCodeRows, regUsers] = await Promise.all([
+      db.affiliate.findMany({ where: { code: { in: allCodes } }, select: { code: true } }),
+      db.user.findMany({ where: { referralCode: { in: allCodes.map((c) => c.toUpperCase()) } }, select: { referralCode: true } }),
+      db.user.findMany({ where: { refCode: { in: allCodes } }, select: { id: true, refCode: true } }),
     ]);
     const affSet = new Set(affCodesRows.map((a) => a.code));
     const userSet = new Set(userCodeRows.map((u) => u.referralCode.toLowerCase()));
-    const regMap = new Map(regRows.map((r) => [r.refCode, r._count._all]));
+    const paidReg = await suertudoSet(regUsers.map((u) => u.id));
+    const regMap = new Map<string, number>(), refMap = new Map<string, number>();
+    for (const u of regUsers) {
+      regMap.set(u.refCode!, (regMap.get(u.refCode!) ?? 0) + 1);
+      if (paidReg.has(u.id)) refMap.set(u.refCode!, (refMap.get(u.refCode!) ?? 0) + 1);
+    }
     const topVisits = allVisits.map((v) => ({
       code: v.code,
       visits: v.count,
       type: affSet.has(v.code) ? "affiliate" : userSet.has(v.code) ? "user" : "unknown",
       registrations: regMap.get(v.code) ?? 0,
-    }));
+      referidos: refMap.get(v.code) ?? 0,
+    })).sort((a, b) => b.referidos - a.referidos || b.registrations - a.registrations || b.visits - a.visits);
     return { totalUsers, withCode, viaAffiliate, viaUser, unknownTotal: unknownUsers.length, totalVisits: totalVisitsAgg._sum.count ?? 0, unknown, topVisits };
   })
 
