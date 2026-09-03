@@ -788,11 +788,19 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       if (body.name !== undefined) data.name = body.name.trim();
       if (body.note !== undefined) data.note = body.note.trim() || null;
       if (body.active !== undefined) data.active = body.active;
+      if (body.code !== undefined) {
+        const code = body.code.trim().toLowerCase();
+        if (!/^[a-z0-9]([a-z0-9-]{1,30}[a-z0-9])?$/.test(code)) { set.status = 422; return { error: "invalid_code" }; }
+        const clash = await db.affiliate.findFirst({ where: { code, id: { not: params.id } } });
+        const userClash = await db.user.findUnique({ where: { referralCode: code.toUpperCase() }, select: { id: true } });
+        if (clash || userClash) { set.status = 409; return { error: "code_taken" }; }
+        data.code = code;
+      }
       const a = await db.affiliate.update({ where: { id: params.id }, data }).catch(() => null);
       if (!a) { set.status = 404; return { error: "not_found" }; }
-      return { ok: true };
+      return { ok: true, code: a.code };
     },
-    { body: t.Object({ name: t.Optional(t.String()), note: t.Optional(t.String()), active: t.Optional(t.Boolean()) }) },
+    { body: t.Object({ code: t.Optional(t.String()), name: t.Optional(t.String()), note: t.Optional(t.String()), active: t.Optional(t.Boolean()) }) },
   )
 
   // Record a cash payout to an affiliate (adds to the paid total).
