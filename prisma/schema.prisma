@@ -59,6 +59,12 @@ model User {
   // True once the +10 lingote first-purchase reward has been paid to referrer.
   referralRewarded Boolean @default(false)
 
+  // Affiliate (scan/brand partner) that brought this user. SEPARATE from the
+  // user-to-user referral graph above: affiliates are paid in cash per valid
+  // referral, tracked in the admin affiliates module.
+  affiliate   Affiliate? @relation(fields: [affiliateId], references: [id])
+  affiliateId String?
+
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
@@ -75,6 +81,20 @@ model User {
   activities     Activity[]
 
   @@index([referredById])
+  @@index([affiliateId])
+}
+
+// Affiliate = a scan/brand partner with a custom vanity code (qori.cc/?ref=code).
+// Paid in cash per VALID referral (a referred user who spent real money).
+model Affiliate {
+  id        String   @id @default(cuid())
+  code      String   @unique // vanity, lowercase, e.g. "totoroscan"
+  name      String // brand/scan display name
+  note      String? // contact (Discord, etc.) + internal notes
+  active    Boolean  @default(true)
+  paidUsd   Int      @default(0) // cents already paid out to this affiliate
+  createdAt DateTime @default(now())
+  users     User[]
 }
 
 // Public activity log for the profile feed (transparency): profile changes and

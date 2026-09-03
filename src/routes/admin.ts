@@ -13,6 +13,8 @@ import { creditTopupIfPending } from "../lib/topups";
 import { applyLedger } from "../lib/wallet";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
+// Affiliates: cash paid per VALID referral (referred user who spent real money).
+const PAYOUT_PER_VALID_CENTS = 50; // $0.50 each ($5 per 10)
 
 export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   .use(withUser)
@@ -734,4 +736,94 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       orderBy: { createdAt: "desc" },
       take: 200,
     });
+  })
+
+  // ---- Affiliates module (scan/brand partners) ----
+  // Paid PER VALID REFERRAL: a referred user who spent real money (>=1 PAID
+  // top-up). Separate from the user-to-user referral system.
+  .get("/affiliates", async () => {
+    const [affiliates, users, paidRows] = await Promise.all([
+      db.affiliate.findMany({ orderBy: { createdAt: "desc" } }),
+      db.user.findMany({ where: { affiliateId: { not: null } }, select: { id: true, affiliateId: true } }),
+      db.topUp.findMany({ where: { status: "PAID" }, distinct: ["userId"], select: { userId: true } }),
+    ]);
+    const paid = new Set(paidRows.map((r) => r.userId));
+    const signup = new Map<string, number>();
+    const valid = new Map<string, number>();
+    for (const u of users) {
+      signup.set(u.affiliateId!, (signup.get(u.affiliateId!) ?? 0) + 1);
+      if (paid.has(u.id)) valid.set(u.affiliateId!, (valid.get(u.affiliateId!) ?? 0) + 1);
+    }
+    return affiliates.map((a) => {
+      const signups = signup.get(a.id) ?? 0;
+      const validRefs = valid.get(a.id) ?? 0;
+      const earnedUsdCents = validRefs * PAYOUT_PER_VALID_CENTS;
+      return {
+        id: a.id, code: a.code, name: a.name, note: a.note, active: a.active, createdAt: a.createdAt,
+        signups, validRefs, earnedUsdCents, paidUsdCents: a.paidUsd,
+        owedUsdCents: Math.max(0, earnedUsdCents - a.paidUsd),
+      };
+    });
+  })
+
+  .post(
+    "/affiliates",
+    async ({ body, set }) => {
+      const code = body.code.trim().toLowerCase();
+      if (!/^[a-z0-9]([a-z0-9-]{1,30}[a-z0-9])?$/.test(code)) { set.status = 422; return { error: "invalid_code" }; }
+      const exists = await db.affiliate.findUnique({ where: { code } });
+      if (exists) { set.status = 409; return { error: "code_taken" }; }
+      const userCode = await db.user.findUnique({ where: { referralCode: code.toUpperCase() }, select: { id: true } });
+      if (userCode) { set.status = 409; return { error: "code_taken" }; }
+      const a = await db.affiliate.create({ data: { code, name: body.name.trim(), note: body.note?.trim() || null } });
+      return { ok: true, id: a.id, code: a.code };
+    },
+    { body: t.Object({ code: t.String(), name: t.String(), note: t.Optional(t.String()) }) },
+  )
+
+  .patch(
+    "/affiliates/:id",
+    async ({ params, body, set }) => {
+      const data: any = {};
+      if (body.name !== undefined) data.name = body.name.trim();
+      if (body.note !== undefined) data.note = body.note.trim() || null;
+      if (body.active !== undefined) data.active = body.active;
+      const a = await db.affiliate.update({ where: { id: params.id }, data }).catch(() => null);
+      if (!a) { set.status = 404; return { error: "not_found" }; }
+      return { ok: true };
+    },
+    { body: t.Object({ name: t.Optional(t.String()), note: t.Optional(t.String()), active: t.Optional(t.Boolean()) }) },
+  )
+
+  // Record a cash payout to an affiliate (adds to the paid total).
+  .post(
+    "/affiliates/:id/payout",
+    async ({ params, body, set }) => {
+      const a = await db.affiliate.findUnique({ where: { id: params.id } });
+      if (!a) { set.status = 404; return { error: "not_found" }; }
+      const cents = Math.round(body.usd * 100);
+      const updated = await db.affiliate.update({ where: { id: params.id }, data: { paidUsd: a.paidUsd + cents } });
+      return { ok: true, paidUsdCents: updated.paidUsd };
+    },
+    { body: t.Object({ usd: t.Number({ minimum: 0 }) }) },
+  )
+
+  // Affiliate detail: the users it brought, with valid (paid) status.
+  .get("/affiliates/:id", async ({ params, set }) => {
+    const a = await db.affiliate.findUnique({ where: { id: params.id } });
+    if (!a) { set.status = 404; return { error: "not_found" }; }
+    const users = await db.user.findMany({
+      where: { affiliateId: a.id },
+      select: { id: true, nickname: true, email: true, username: true, createdAt: true },
+      orderBy: { createdAt: "desc" },
+    });
+    const paid = new Set((await db.topUp.groupBy({ by: ["userId"], where: { userId: { in: users.map((u) => u.id) }, status: "PAID" } })).map((r) => r.userId));
+    const spentBy = new Map<string, number>();
+    for (const r of await db.topUp.groupBy({ by: ["userId"], where: { userId: { in: users.map((u) => u.id) }, status: "PAID" }, _sum: { amountUsd: true } })) {
+      spentBy.set(r.userId, r._sum.amountUsd ?? 0);
+    }
+    return {
+      affiliate: { id: a.id, code: a.code, name: a.name, note: a.note, active: a.active, paidUsdCents: a.paidUsd },
+      users: users.map((u) => ({ nickname: u.nickname, email: u.email, username: u.username, createdAt: u.createdAt, valid: paid.has(u.id), spentUsdCents: spentBy.get(u.id) ?? 0 })),
+    };
   });

@@ -78,6 +78,17 @@ function sessionCookieOpts(expiresAt: Date) {
   };
 }
 
+// Resolve a ?ref code into attribution. An affiliate (scan/brand) vanity code
+// wins; otherwise it's treated as a user-to-user referral code.
+async function resolveRef(ref: string): Promise<{ referredById: string | null; affiliateId: string | null }> {
+  const raw = ref.trim();
+  if (!raw) return { referredById: null, affiliateId: null };
+  const aff = await db.affiliate.findUnique({ where: { code: raw.toLowerCase() } });
+  if (aff && aff.active) return { referredById: null, affiliateId: aff.id };
+  const referrer = await db.user.findUnique({ where: { referralCode: raw.toUpperCase() } });
+  return { referredById: referrer?.id ?? null, affiliateId: null };
+}
+
 /**
  * Session plugin: resolves `user` (or null) from the session cookie and exposes
  * it globally. Named + deduped by Elysia, so `auth`, `me` and any other plugin
@@ -166,12 +177,12 @@ export const auth = new Elysia({ name: "auth" })
         return { error: "invalid_code" };
       }
 
-      // Resolve referrer from an optional referral code.
+      // Resolve an optional ?ref code: an affiliate (scan/brand) vanity code
+      // takes priority; otherwise fall back to a user-to-user referral code.
       let referredById: string | null = null;
+      let affiliateId: string | null = null;
       if (body.ref) {
-        // Codes are generated uppercase; accept them case-insensitively.
-        const referrer = await db.user.findUnique({ where: { referralCode: body.ref.trim().toUpperCase() } });
-        if (referrer) referredById = referrer.id;
+        ({ referredById, affiliateId } = await resolveRef(body.ref));
       }
 
       const user = await db.user.create({
@@ -184,6 +195,7 @@ export const auth = new Elysia({ name: "auth" })
           country: body.country,
           referralCode: await uniqueReferralCode(),
           referredById,
+          affiliateId,
         },
       });
       await db.emailVerification.delete({ where: { email } }).catch(() => {});
@@ -429,13 +441,11 @@ export const auth = new Elysia({ name: "auth" })
         const email = profile.email.trim().toLowerCase();
         let u = await tx.user.findUnique({ where: { email } });
         if (!u) {
-          // Credit the referrer if this new account arrived via a ?ref=CODE link.
-          const refCode = (cookie["qori_oauth_ref"]?.value ?? "").trim().toUpperCase();
+          // Apply ?ref attribution (affiliate vanity code or user referral).
+          const refCode = (cookie["qori_oauth_ref"]?.value ?? "").trim();
           let referredById: string | null = null;
-          if (refCode) {
-            const referrer = await tx.user.findUnique({ where: { referralCode: refCode }, select: { id: true } });
-            if (referrer) referredById = referrer.id;
-          }
+          let affiliateId: string | null = null;
+          if (refCode) ({ referredById, affiliateId } = await resolveRef(refCode));
           u = await tx.user.create({
             data: {
               email,
@@ -445,6 +455,7 @@ export const auth = new Elysia({ name: "auth" })
               avatarUrl: profile.picture,
               referralCode: await uniqueReferralCode(),
               referredById,
+              affiliateId,
             },
           });
         }
