@@ -846,7 +846,25 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     ]);
     const uv = new Map(unknownVisits.map((v) => [v.code, v.count]));
     const unknown = [...map.entries()].map(([code, e]) => ({ code, count: e.count, bought: e.bought, visits: uv.get(code) ?? 0 })).sort((a, b) => b.count - a.count);
-    return { totalUsers, withCode, viaAffiliate, viaUser, unknownTotal: unknownUsers.length, totalVisits: totalVisitsAgg._sum.count ?? 0, unknown };
+
+    // All codes by visits, classified (affiliate / user / unknown) + how many
+    // of those visits ended up registering. Shows clicks that never converted.
+    const allVisits = await db.refVisit.findMany({ orderBy: { count: "desc" }, take: 60 });
+    const [affCodesRows, userCodeRows, regRows] = await Promise.all([
+      db.affiliate.findMany({ where: { code: { in: allVisits.map((v) => v.code) } }, select: { code: true } }),
+      db.user.findMany({ where: { referralCode: { in: allVisits.map((v) => v.code.toUpperCase()) } }, select: { referralCode: true } }),
+      db.user.groupBy({ by: ["refCode"], where: { refCode: { in: allVisits.map((v) => v.code) } }, _count: { _all: true } }),
+    ]);
+    const affSet = new Set(affCodesRows.map((a) => a.code));
+    const userSet = new Set(userCodeRows.map((u) => u.referralCode.toLowerCase()));
+    const regMap = new Map(regRows.map((r) => [r.refCode, r._count._all]));
+    const topVisits = allVisits.map((v) => ({
+      code: v.code,
+      visits: v.count,
+      type: affSet.has(v.code) ? "affiliate" : userSet.has(v.code) ? "user" : "unknown",
+      registrations: regMap.get(v.code) ?? 0,
+    }));
+    return { totalUsers, withCode, viaAffiliate, viaUser, unknownTotal: unknownUsers.length, totalVisits: totalVisitsAgg._sum.count ?? 0, unknown, topVisits };
   })
 
   // Affiliate detail: the users it brought, with valid (paid) status.
