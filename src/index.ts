@@ -164,22 +164,42 @@ const app = new Elysia({ prefix: "/api" })
     return { top: entries };
   })
 
-  // Look up a referral code (user or affiliate): how many it referred + who.
+  // Look up a referral code (user or affiliate): who registered and BOUGHT,
+  // who registered but hasn't bought, and a 7-day daily breakdown. No amounts.
   .get("/referrals/lookup", async ({ query }) => {
     const raw = (query.code ?? "").trim();
     if (!raw) return { found: false };
-    const listOf = (where: any) => db.user.findMany({ where, select: { username: true, nickname: true, avatarUrl: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 300 });
+    let owner: any = null;
+    let where: any = null;
     const aff = await db.affiliate.findUnique({ where: { code: raw.toLowerCase() } });
     if (aff) {
-      const referred = await listOf({ affiliateId: aff.id });
-      return { found: true, type: "affiliate", owner: { name: aff.name, code: aff.code, avatarUrl: null, username: null }, count: referred.length, referred };
+      owner = { name: aff.name, code: aff.code, avatarUrl: null, username: null };
+      where = { affiliateId: aff.id };
+    } else {
+      const u = await db.user.findUnique({ where: { referralCode: raw.toUpperCase() }, select: { id: true, username: true, nickname: true, avatarUrl: true } });
+      if (!u) return { found: false };
+      owner = { name: u.nickname, username: u.username, avatarUrl: u.avatarUrl, code: raw.toUpperCase() };
+      where = { referredById: u.id };
     }
-    const u = await db.user.findUnique({ where: { referralCode: raw.toUpperCase() }, select: { id: true, username: true, nickname: true, avatarUrl: true } });
-    if (u) {
-      const referred = await listOf({ referredById: u.id });
-      return { found: true, type: "user", owner: { name: u.nickname, username: u.username, avatarUrl: u.avatarUrl, code: raw.toUpperCase() }, count: referred.length, referred };
+    const referred = await db.user.findMany({ where, select: { id: true, username: true, nickname: true, avatarUrl: true, createdAt: true }, orderBy: { createdAt: "desc" }, take: 500 });
+    const paid = await suertudoSet(referred.map((r) => r.id));
+    const strip = (u: any) => ({ username: u.username, nickname: u.nickname, avatarUrl: u.avatarUrl, createdAt: u.createdAt });
+    const bought = referred.filter((u) => paid.has(u.id)).map(strip);
+    const notBought = referred.filter((u) => !paid.has(u.id)).map(strip);
+    // 7-day daily breakdown (registrations, split by whether they bought).
+    const now = Date.now();
+    const daily: { date: string; total: number; bought: number }[] = [];
+    const idx = new Map<string, number>();
+    for (let i = 6; i >= 0; i--) {
+      const key = new Date(now - i * 86400000).toISOString().slice(0, 10);
+      idx.set(key, daily.length);
+      daily.push({ date: key, total: 0, bought: 0 });
     }
-    return { found: false };
+    for (const u of referred) {
+      const i = idx.get(u.createdAt.toISOString().slice(0, 10));
+      if (i !== undefined) { daily[i].total++; if (paid.has(u.id)) daily[i].bought++; }
+    }
+    return { found: true, type: aff ? "affiliate" : "user", owner, count: referred.length, boughtCount: bought.length, bought, notBought, daily };
   }, { query: t.Object({ code: t.Optional(t.String()) }) })
 
   .get("/raffles", async ({ set }) => {
