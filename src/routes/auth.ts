@@ -196,6 +196,7 @@ export const auth = new Elysia({ name: "auth" })
           referralCode: await uniqueReferralCode(),
           referredById,
           affiliateId,
+          refCode: body.ref?.trim().toLowerCase() || null,
         },
       });
       await db.emailVerification.delete({ where: { email } }).catch(() => {});
@@ -456,6 +457,7 @@ export const auth = new Elysia({ name: "auth" })
               referralCode: await uniqueReferralCode(),
               referredById,
               affiliateId,
+              refCode: refCode ? refCode.toLowerCase() : null,
             },
           });
         }

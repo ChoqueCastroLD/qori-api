@@ -143,6 +143,16 @@ const app = new Elysia({ prefix: "/api" })
     return { suertudos: top.map((u, i) => ({ rank: i + 1, username: u.username, nickname: u.nickname, avatarUrl: u.avatarUrl, lingotes: u.balance })) };
   })
 
+  // Record a unique visit to a ?ref link (dedup is client-side, once per browser
+  // per code). Lets us see how many people clicked a code even without signing up.
+  .post("/public/ref-visit", async ({ body, set }) => {
+    set.headers["access-control-allow-origin"] = "*";
+    const code = (body.code ?? "").trim().toLowerCase();
+    if (!/^[a-z0-9][a-z0-9-]{0,31}$/.test(code)) return { ok: false };
+    await db.refVisit.upsert({ where: { code }, create: { code, count: 1 }, update: { count: { increment: 1 } } });
+    return { ok: true };
+  }, { body: t.Object({ code: t.String() }) })
+
   // Public referral leaderboard: users AND affiliate brands, most referrals
   // first, only those with >= 1 referral.
   .get("/referrals/top", async ({ set }) => {

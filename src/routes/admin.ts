@@ -11,6 +11,7 @@ import { sendEmail, prizeClaimEmail, promoDuplicaEmail } from "../lib/email";
 import { newClaimCode } from "../lib/claim";
 import { creditTopupIfPending } from "../lib/topups";
 import { applyLedger } from "../lib/wallet";
+import { suertudoSet } from "../lib/suertudo";
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 // Affiliates: cash paid per VALID referral (referred user who spent real money).
@@ -748,6 +749,8 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       db.topUp.findMany({ where: { status: "PAID" }, distinct: ["userId"], select: { userId: true } }),
     ]);
     const paid = new Set(paidRows.map((r) => r.userId));
+    const visitRows = await db.refVisit.findMany({ where: { code: { in: affiliates.map((a) => a.code) } } });
+    const visitMap = new Map(visitRows.map((v) => [v.code, v.count]));
     const signup = new Map<string, number>();
     const valid = new Map<string, number>();
     for (const u of users) {
@@ -760,7 +763,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       const earnedUsdCents = validRefs * PAYOUT_PER_VALID_CENTS;
       return {
         id: a.id, code: a.code, name: a.name, note: a.note, active: a.active, createdAt: a.createdAt,
-        signups, validRefs, earnedUsdCents, paidUsdCents: a.paidUsd,
+        visits: visitMap.get(a.code) ?? 0, signups, validRefs, earnedUsdCents, paidUsdCents: a.paidUsd,
         owedUsdCents: Math.max(0, earnedUsdCents - a.paidUsd),
       };
     });
@@ -815,6 +818,36 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     },
     { body: t.Object({ usd: t.Number({ minimum: 0 }) }) },
   )
+
+  // Referral traffic stats: how people registered via any ?ref code, incl.
+  // UNKNOWN codes (matched no user/affiliate) so we can investigate misuse.
+  .get("/referral-stats", async () => {
+    const [totalUsers, withCode, viaAffiliate, viaUser] = await Promise.all([
+      db.user.count(),
+      db.user.count({ where: { refCode: { not: null } } }),
+      db.user.count({ where: { affiliateId: { not: null } } }),
+      db.user.count({ where: { referredById: { not: null } } }),
+    ]);
+    const unknownUsers = await db.user.findMany({
+      where: { refCode: { not: null }, affiliateId: null, referredById: null },
+      select: { id: true, refCode: true },
+    });
+    const paid = await suertudoSet(unknownUsers.map((u) => u.id));
+    const map = new Map<string, { count: number; bought: number }>();
+    for (const u of unknownUsers) {
+      const e = map.get(u.refCode!) ?? { count: 0, bought: 0 };
+      e.count++; if (paid.has(u.id)) e.bought++;
+      map.set(u.refCode!, e);
+    }
+    const unknownCodes = [...map.keys()];
+    const [totalVisitsAgg, unknownVisits] = await Promise.all([
+      db.refVisit.aggregate({ _sum: { count: true } }),
+      unknownCodes.length ? db.refVisit.findMany({ where: { code: { in: unknownCodes } } }) : Promise.resolve([]),
+    ]);
+    const uv = new Map(unknownVisits.map((v) => [v.code, v.count]));
+    const unknown = [...map.entries()].map(([code, e]) => ({ code, count: e.count, bought: e.bought, visits: uv.get(code) ?? 0 })).sort((a, b) => b.count - a.count);
+    return { totalUsers, withCode, viaAffiliate, viaUser, unknownTotal: unknownUsers.length, totalVisits: totalVisitsAgg._sum.count ?? 0, unknown };
+  })
 
   // Affiliate detail: the users it brought, with valid (paid) status.
   .get("/affiliates/:id", async ({ params, set }) => {
