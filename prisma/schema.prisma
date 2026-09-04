@@ -192,6 +192,7 @@ enum TopUpMethod {
   MERCADOPAGO
   CRYPTO
   FLOW
+  DIRECTO
 }
 
 enum TopUpStatus {

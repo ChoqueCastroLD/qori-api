@@ -732,6 +732,35 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     return { ok: true };
   })
 
+  // Create a DIRECT top-up (payment received off-gateway, e.g. transfer/cash):
+  // records it as PAID with zero commission (net = gross) and credits lingotes.
+  .post(
+    "/topups/direct",
+    async ({ body, set }) => {
+      const u = body.email
+        ? await db.user.findUnique({ where: { email: body.email.toLowerCase() }, select: { id: true } })
+        : body.username
+          ? await db.user.findUnique({ where: { username: body.username.toLowerCase() }, select: { id: true } })
+          : null;
+      if (!u) { set.status = 404; return { error: "not_found" }; }
+      const amountUsd = body.amountUsd; // cents
+      const lingotes = body.lingotes;
+      const topup = await db.$transaction(async (tx) => {
+        const t = await tx.topUp.create({
+          data: {
+            userId: u.id, amountUsd, lingotes, method: "DIRECTO", status: "PAID",
+            chargeCurrency: "USD", grossAmount: amountUsd, feeAmount: 0, netAmount: amountUsd,
+            confirmedAt: new Date(),
+          },
+        });
+        await applyLedger(tx, { userId: u.id, amount: lingotes, type: "TOPUP", refType: "topup", refId: t.id, memo: `Recarga directa $${(amountUsd / 100).toFixed(2)}` });
+        return t;
+      });
+      return { ok: true, topupId: topup.id, amountUsd, lingotes };
+    },
+    { body: t.Object({ email: t.Optional(t.String()), username: t.Optional(t.String()), amountUsd: t.Integer({ minimum: 1 }), lingotes: t.Integer({ minimum: 1 }) }) },
+  )
+
   // Backfill Flow commission/net for paid Flow top-ups that were credited before
   // fee capture (queries Flow by our commerceOrder = topup id).
   .post("/flow/backfill-fees", async () => {
