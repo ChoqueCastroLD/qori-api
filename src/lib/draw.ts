@@ -216,9 +216,13 @@ async function executeBingoDraw(raffle: Raffle): Promise<DrawResult | null> {
   const claimCodes: string[] = [];
   for (let i = 0; i < n; i++) claimCodes.push(await newBingoClaimCode());
 
+  // Seconds between balls, configurable per raffle (default 18). Clamped to a
+  // sane range so a game can't be instant or absurdly long.
+  const intervalSec = Math.min(60, Math.max(6, raffle.bingoIntervalSec ?? 18));
+
   const startsAt = new Date();
   // The reveal runs until the winning ball is called.
-  const endsAt = new Date(startsAt.getTime() + (winningBallIndex + 1) * 18 * 1000);
+  const endsAt = new Date(startsAt.getTime() + (winningBallIndex + 1) * intervalSec * 1000);
 
   await db.$transaction(async (tx) => {
     await tx.raffle.update({
@@ -246,8 +250,8 @@ async function executeBingoDraw(raffle: Raffle): Promise<DrawResult | null> {
     }
     await tx.bingoGame.upsert({
       where: { raffleId },
-      update: { ballOrder: order, intervalSec: 18, startsAt, endsAt },
-      create: { raffleId, ballOrder: order, intervalSec: 18, startsAt, endsAt },
+      update: { ballOrder: order, intervalSec, startsAt, endsAt },
+      create: { raffleId, ballOrder: order, intervalSec, startsAt, endsAt },
     });
   });
 

@@ -278,6 +278,8 @@ model Raffle {
   // total card cap, maxTicketsPerUser = max cards per user, winnersCount is
   // advisory (a full-card tie can produce more, prize split by USD value).
   kind        RaffleKind   @default(SHOW)
+  // Seconds between balls in a BINGO draw (null = default 18). Lower = faster game.
+  bingoIntervalSec Int?
   prizeValue  Int // USD cents, for display/transparency
   ticketPrice Int // lingotes per ticket (0 = free)
   totalTickets     Int // cupo total

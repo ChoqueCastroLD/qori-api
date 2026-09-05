@@ -21,6 +21,37 @@ import { getRates } from "./lib/fx";
 const PORT = Number(process.env.PORT ?? 3000);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:4321";
 
+/**
+ * Public winners for a BINGO raffle: grouped by user so a multi-card winner
+ * shows once with their combined USD share and how many cards they won with.
+ * ticketNumber is null (bingo has no ticket numbers).
+ */
+function bingoWinnersPublic(wins: any[]) {
+  const grouped = new Map<string, { position: number; nickname: string | null; avatarUrl: string | null; shareCents: number; cards: number }>();
+  for (const w of wins) {
+    const key = w.userId ?? `anon:${w.id}`;
+    const prev = grouped.get(key);
+    if (prev) { prev.shareCents += w.shareUsd; prev.cards += 1; }
+    else grouped.set(key, {
+      position: w.position,
+      nickname: w.user?.nickname ?? w.user?.username ?? null,
+      avatarUrl: w.user?.avatarUrl ?? null,
+      shareCents: w.shareUsd,
+      cards: 1,
+    });
+  }
+  return [...grouped.values()]
+    .sort((a, b) => a.position - b.position)
+    .map((g) => ({
+      position: g.position,
+      ticketNumber: null as number | null,
+      nickname: g.nickname,
+      avatarUrl: g.avatarUrl,
+      shareUsd: g.shareCents / 100,
+      cards: g.cards,
+    }));
+}
+
 /** Public-safe view of a raffle: never leaks an unrevealed serverSeed. */
 function publicRaffle(r: any) {
   return {
@@ -48,7 +79,8 @@ function publicRaffle(r: any) {
     extensions: r.extensions ?? [],
     blocked: r.blocked ?? false,
     blockReason: r.blockReason ?? null,
-    ticketsSold: r._count?.tickets ?? undefined,
+    ticketsSold: (r.kind === "BINGO" ? r._count?.bingoCards : r._count?.tickets) ?? undefined,
+    bingoIntervalSec: r.bingoIntervalSec ?? null,
     fairness: {
       commitment: r.commitment,
       entropySource: r.entropySource,
@@ -70,7 +102,7 @@ async function publicFeatured(set: any) {
   const r = await db.raffle.findFirst({
     where: { status: "OPEN", blocked: false, legacy: false, closesAt: { not: null } },
     orderBy: { closesAt: "asc" },
-    include: { _count: { select: { tickets: true } } },
+    include: { _count: { select: { tickets: true, bingoCards: true } } },
   });
   if (!r) return { serverNow: now.toISOString(), raffle: null };
   return {
@@ -242,13 +274,14 @@ const app = new Elysia({ prefix: "/api" })
       where: { status: { in: ["OPEN", "CLOSED", "DRAWING", "DRAWN"] } },
       orderBy: [{ status: "asc" }, { closesAt: "asc" }, { createdAt: "desc" }],
       include: {
-        _count: { select: { tickets: true } },
+        _count: { select: { tickets: true, bingoCards: true } },
         winners: { include: { ticket: true, user: true }, orderBy: { position: "asc" } },
+        bingoWins: { include: { user: true }, orderBy: { position: "asc" } },
       },
     });
     const data = raffles.map((r) => ({
       ...publicRaffle(r),
-      winners: r.winners.map((w) => ({
+      winners: r.kind === "BINGO" ? bingoWinnersPublic(r.bingoWins) : r.winners.map((w) => ({
         position: w.position,
         ticketNumber: w.ticket.number,
         nickname: w.user?.nickname ?? w.name ?? null,
@@ -264,8 +297,9 @@ const app = new Elysia({ prefix: "/api" })
     const raffle = await db.raffle.findUnique({
       where: { slug: params.slug },
       include: {
-        _count: { select: { tickets: true } },
+        _count: { select: { tickets: true, bingoCards: true } },
         winners: { include: { ticket: true, user: true }, orderBy: { position: "asc" } },
+        bingoWins: { include: { user: true }, orderBy: { position: "asc" } },
         show: true,
       },
     });
@@ -295,14 +329,20 @@ const app = new Elysia({ prefix: "/api" })
     return {
       ...publicRaffle(raffle),
       show,
-      winners: raffle.winners.map((w) => ({
-        position: w.position,
-        ticketNumber: w.ticket.number,
-        nickname: w.user?.nickname ?? w.name ?? null,
-        avatarUrl: w.user?.avatarUrl ?? null,
-        username: w.user?.username ?? null,
-        suertudo: w.user?.id ? luckyWinners.has(w.user.id) : false,
-      })),
+      winners: raffle.kind === "BINGO"
+        ? bingoWinnersPublic(raffle.bingoWins).map((w) => ({
+            ...w,
+            username: raffle.bingoWins.find((bw) => bw.position === w.position)?.user?.username ?? null,
+            suertudo: false,
+          }))
+        : raffle.winners.map((w) => ({
+            position: w.position,
+            ticketNumber: w.ticket.number,
+            nickname: w.user?.nickname ?? w.name ?? null,
+            avatarUrl: w.user?.avatarUrl ?? null,
+            username: w.user?.username ?? null,
+            suertudo: w.user?.id ? luckyWinners.has(w.user.id) : false,
+          })),
     };
   })
 

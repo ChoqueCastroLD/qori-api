@@ -138,6 +138,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
           minTickets: body.minTickets ?? 1,
           maxTicketsPerUser: body.maxTicketsPerUser ?? null,
           winnersCount: 1, // advisory; a same-ball tie splits the prize by USD value
+          bingoIntervalSec: body.intervalSec != null ? Math.min(60, Math.max(6, body.intervalSec)) : null,
           paidOnly: body.paidOnly ?? false,
           games: [],
           entropySource: "drand (round programada a la hora del sorteo) + raíz de cartones",
@@ -162,6 +163,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         totalTickets: t.Integer({ minimum: 1 }),
         minTickets: t.Optional(t.Integer({ minimum: 0 })),
         maxTicketsPerUser: t.Optional(t.Integer({ minimum: 1 })),
+        intervalSec: t.Optional(t.Integer({ minimum: 6, maximum: 60 })),
         paidOnly: t.Optional(t.Boolean()),
         closesAt: t.Optional(t.String()),
         status: t.Optional(t.String()),
