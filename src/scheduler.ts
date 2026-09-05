@@ -36,7 +36,9 @@ async function tick() {
   const due = await db.raffle.findMany({ where: { status: "OPEN", blocked: false, closesAt: { lte: now } } });
   for (const r of due) {
     try {
-      const count = await db.ticket.count({ where: { raffleId: r.id } });
+      const count = r.kind === "BINGO"
+        ? await db.bingoCard.count({ where: { raffleId: r.id } })
+        : await db.ticket.count({ where: { raffleId: r.id } });
       if (count >= r.minTickets) {
         const res = await executeDraw(r.id);
         if (res) console.log(`⏰ auto-draw ${r.slug} → ganador(es) ${res.winners.map((w) => "#" + w.number).join(", ")}`);

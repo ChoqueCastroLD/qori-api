@@ -82,6 +82,8 @@ model User {
   confirmedTopups TopUp[]       @relation("TopUpConfirmedBy")
   chatMessages   ChatMessage[]
   activities     Activity[]
+  bingoCards     BingoCard[]
+  bingoWins      BingoWin[]
 
   @@index([referredById])
   @@index([affiliateId])
@@ -246,6 +248,14 @@ enum RaffleStatus {
   CANCELLED // called off; lingotes refunded
 }
 
+// Raffle format. SHOW = the animated ticket draw (elimination games). BINGO =
+// live 75-ball full-card bingo (own cards, ball order, tie-split). Default SHOW
+// so every existing raffle keeps its behavior.
+enum RaffleKind {
+  SHOW
+  BINGO
+}
+
 enum GameType {
   ELIMINATION // tickets eliminated in order until winners remain
   DIGIT_REVEAL // winning number's digits revealed one by one
@@ -264,6 +274,10 @@ model Raffle {
   title       String
   description String       @db.Text
   images      String[]
+  // Raffle format. For BINGO: ticketPrice = lingotes per CARD, totalTickets =
+  // total card cap, maxTicketsPerUser = max cards per user, winnersCount is
+  // advisory (a full-card tie can produce more, prize split by USD value).
+  kind        RaffleKind   @default(SHOW)
   prizeValue  Int // USD cents, for display/transparency
   ticketPrice Int // lingotes per ticket (0 = free)
   totalTickets     Int // cupo total
@@ -317,6 +331,11 @@ model Raffle {
   show     DrawShow?
   chat     ChatMessage[]
 
+  // Bingo relations (only used when kind = BINGO).
+  bingoCards BingoCard[]
+  bingoWins  BingoWin[]
+  bingoGame  BingoGame?
+
   @@index([status])
 }
 
@@ -337,7 +356,8 @@ model Order {
   status        OrderStatus @default(CONFIRMED)
   createdAt     DateTime    @default(now())
 
-  tickets Ticket[]
+  tickets     Ticket[]
+  bingoCards  BingoCard[]
 
   @@index([raffleId])
   @@index([userId])
@@ -383,6 +403,73 @@ model Winner {
 
   @@unique([raffleId, position])
   @@index([raffleId])
+}
+
+// ---------------------------------------------------------------------------
+// Bingo (kind = BINGO): player cards, live ball order, full-card winners
+// ---------------------------------------------------------------------------
+
+// A player's bingo card in a raffle. Classic 5x5 B-I-N-G-O; center is FREE
+// (implicit, not stored). `cols` holds the chosen numbers per column
+// { B:[5], I:[5], N:[4], G:[5], O:[5] }; `key` is the sorted 24-number canonical
+// string, unique per raffle (enforces "no two identical cards"). Position within
+// a column is cosmetic (win = full card), so `cols` doubles as display + source.
+model BingoCard {
+  id       String  @id @default(cuid())
+  raffle   Raffle  @relation(fields: [raffleId], references: [id])
+  raffleId String
+  owner    User    @relation(fields: [ownerId], references: [id])
+  ownerId  String
+  order    Order?  @relation(fields: [orderId], references: [id])
+  orderId  String?
+  seq      Int // 1-based within the raffle (issue order / display)
+  cols     Json
+  key      String // canonical sorted 24-number set key (uniqueness)
+  createdAt DateTime @default(now())
+
+  win BingoWin?
+
+  @@unique([raffleId, key])
+  @@unique([raffleId, seq])
+  @@index([raffleId])
+  @@index([ownerId])
+}
+
+// Winning card(s) of a bingo draw. On a same-ball tie there are several rows,
+// each with an equal `shareUsd` of the prize's USD value.
+model BingoWin {
+  id       String    @id @default(cuid())
+  raffle   Raffle    @relation(fields: [raffleId], references: [id])
+  raffleId String
+  card     BingoCard @relation(fields: [cardId], references: [id])
+  cardId   String    @unique
+  user     User?     @relation(fields: [userId], references: [id])
+  userId   String?
+  position Int       @default(1)
+  shareUsd Int // USD cents this winner receives (prizeValue split on ties)
+
+  claimCode   String?   @unique
+  prizeStatus String    @default("PENDING") // PENDING | DELIVERED
+  notifiedAt  DateTime?
+  deliveredAt DateTime?
+  createdAt   DateTime  @default(now())
+
+  @@index([raffleId])
+  @@index([userId])
+}
+
+// The live bingo draw: the provably-fair ball order (from drawDigest) plus the
+// synchronized timeline. One per raffle; balls reveal at `intervalSec` steps
+// from `startsAt`, so every client shows the same ball at the same moment.
+model BingoGame {
+  id          String    @id @default(cuid())
+  raffle      Raffle    @relation(fields: [raffleId], references: [id], onDelete: Cascade)
+  raffleId    String    @unique
+  ballOrder   Int[] // permutation of 1..75, derived from raffle.drawDigest
+  intervalSec Int       @default(18)
+  startsAt    DateTime
+  endsAt      DateTime?
+  createdAt   DateTime  @default(now())
 }
 
 // Dedupe for lifecycle emails: one row per (raffle, kind) once sent.

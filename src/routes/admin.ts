@@ -109,6 +109,66 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     },
   )
 
+  // Create a BINGO raffle (auto-commitment). ticketPrice = lingotes per CARD,
+  // totalTickets = total card cap, maxTicketsPerUser = max cards per user.
+  // Born DRAFT by default so it never touches live raffles until we flip it.
+  .post(
+    "/bingo",
+    async ({ body, set }) => {
+      if (!/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(body.slug)) {
+        set.status = 422;
+        return { error: "invalid_slug" };
+      }
+      const existing = await db.raffle.findUnique({ where: { slug: body.slug } });
+      if (existing) {
+        set.status = 409;
+        return { error: "slug_taken" };
+      }
+      const { serverSeed, commitment } = await createCommitment();
+      const raffle = await db.raffle.create({
+        data: {
+          kind: "BINGO",
+          slug: body.slug,
+          title: body.title,
+          description: body.description,
+          images: body.images ?? [],
+          prizeValue: body.prizeValue,
+          ticketPrice: body.ticketPrice,
+          totalTickets: body.totalTickets,
+          minTickets: body.minTickets ?? 1,
+          maxTicketsPerUser: body.maxTicketsPerUser ?? null,
+          winnersCount: 1, // advisory; a same-ball tie splits the prize by USD value
+          paidOnly: body.paidOnly ?? false,
+          games: [],
+          entropySource: "drand (round programada a la hora del sorteo) + raíz de cartones",
+          commitment,
+          serverSeed,
+          status: (body.status ?? "DRAFT") as any,
+          opensAt: new Date(),
+          closesAt: body.closesAt ? new Date(body.closesAt) : null,
+        },
+      });
+      bustRafflesCache();
+      return { id: raffle.id, slug: raffle.slug, commitment };
+    },
+    {
+      body: t.Object({
+        slug: t.String(),
+        title: t.String(),
+        description: t.String(),
+        images: t.Optional(t.Array(t.String())),
+        prizeValue: t.Integer(),
+        ticketPrice: t.Integer({ minimum: 0 }),
+        totalTickets: t.Integer({ minimum: 1 }),
+        minTickets: t.Optional(t.Integer({ minimum: 0 })),
+        maxTicketsPerUser: t.Optional(t.Integer({ minimum: 1 })),
+        paidOnly: t.Optional(t.Boolean()),
+        closesAt: t.Optional(t.String()),
+        status: t.Optional(t.String()),
+      }),
+    },
+  )
+
   // Upload a raffle image to R2, returns its public URL.
   .post(
     "/upload",
@@ -141,7 +201,9 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       set.status = 409;
       return { error: "already_drawn" };
     }
-    const count = await db.ticket.count({ where: { raffleId: raffle.id } });
+    const count = raffle.kind === "BINGO"
+      ? await db.bingoCard.count({ where: { raffleId: raffle.id } })
+      : await db.ticket.count({ where: { raffleId: raffle.id } });
     if (count < raffle.minTickets) {
       set.status = 422;
       return { error: "below_min_tickets", ticketCount: count, minTickets: raffle.minTickets };

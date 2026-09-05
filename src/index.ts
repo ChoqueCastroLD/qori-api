@@ -14,6 +14,7 @@ import { mp } from "./routes/mp";
 import { paypal } from "./routes/paypal";
 import { nowpayments } from "./routes/nowpayments";
 import { flow } from "./routes/flow";
+import { bingo } from "./routes/bingo";
 import { startScheduler } from "./scheduler";
 import { getRates } from "./lib/fx";
 
@@ -25,6 +26,7 @@ function publicRaffle(r: any) {
   return {
     id: r.id,
     slug: r.slug,
+    kind: r.kind ?? "SHOW",
     title: r.title,
     description: r.description,
     images: r.images,
@@ -108,6 +110,7 @@ const app = new Elysia({ prefix: "/api" })
   .use(paypal)
   .use(nowpayments)
   .use(flow)
+  .use(bingo)
   .get("/health", () => ({ ok: true, service: "qori-api" }))
 
   // WebSocket: live ticket counts. Clients update any [data-live-sold="<slug>"]

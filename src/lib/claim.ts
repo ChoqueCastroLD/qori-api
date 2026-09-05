@@ -22,3 +22,16 @@ export async function newClaimCode(): Promise<string> {
   // Astronomically unlikely; fall back to a longer code.
   return `${randomCode()}-${randomCode().slice(5)}`;
 }
+
+/** Claim code unique across BOTH winner tables (show + bingo share the namespace). */
+export async function newBingoClaimCode(): Promise<string> {
+  for (let i = 0; i < 12; i++) {
+    const code = randomCode();
+    const [w, b] = await Promise.all([
+      db.winner.findUnique({ where: { claimCode: code }, select: { id: true } }),
+      db.bingoWin.findUnique({ where: { claimCode: code }, select: { id: true } }),
+    ]);
+    if (!w && !b) return code;
+  }
+  return `${randomCode()}-${randomCode().slice(5)}`;
+}

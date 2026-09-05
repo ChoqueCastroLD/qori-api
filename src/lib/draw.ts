@@ -1,9 +1,11 @@
 import { db } from "../db";
+import type { Raffle } from "@prisma/client";
 import { applyLedger } from "./wallet";
 import { hmacSha256Hex, sha256Hex } from "../fair";
 import { generateShow, generateShowV2, type GameType } from "../show";
 import { publishDrawStart } from "./liveRaffles";
-import { newClaimCode } from "./claim";
+import { newClaimCode, newBingoClaimCode } from "./claim";
+import { ballOrder, findWinners, colsToCard, type BingoCols } from "./bingo";
 
 const DRAND_BASE = "https://api.drand.sh";
 
@@ -79,8 +81,16 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
   if (claim.count === 0) return null;
 
   const raffle = await db.raffle.findUnique({ where: { id: raffleId } });
+  if (!raffle) {
+    await db.raffle.update({ where: { id: raffleId }, data: { status: "OPEN" } }).catch(() => {});
+    return null;
+  }
+
+  // Bingo raffles use their own card-based draw (ball order + full-card winners).
+  if (raffle.kind === "BINGO") return executeBingoDraw(raffle);
+
   const tickets = await db.ticket.findMany({ where: { raffleId }, orderBy: { number: "asc" } });
-  if (!raffle || tickets.length === 0) {
+  if (tickets.length === 0) {
     await db.raffle.update({ where: { id: raffleId }, data: { status: "OPEN" } });
     return null;
   }
@@ -147,6 +157,104 @@ export async function executeDraw(raffleId: string): Promise<DrawResult | null> 
 
   return {
     winners: winnerTickets.map((wt, i) => ({ position: i + 1, number: wt.number })),
+    publicEntropy,
+    digest,
+    drandRound: drand.round,
+  };
+}
+
+/** Deterministic root binding the exact card set into the entropy (bingo). */
+async function computeCardsRoot(raffleId: string): Promise<string> {
+  const cards = await db.bingoCard.findMany({
+    where: { raffleId },
+    orderBy: { seq: "asc" },
+    select: { seq: true, key: true, ownerId: true },
+  });
+  const canonical = cards.map((c) => `${c.seq}:${c.key}:${c.ownerId}`).join("|");
+  return sha256Hex(canonical);
+}
+
+/**
+ * Bingo draw: derive the 75-ball order from the provably-fair digest, find the
+ * card(s) that complete first (full card), split the prize's USD value on a
+ * same-ball tie, and lay down the synchronized ball timeline. `raffle` is
+ * already claimed to DRAWING by executeDraw. Reverts to OPEN if not ready.
+ */
+async function executeBingoDraw(raffle: Raffle): Promise<DrawResult | null> {
+  const raffleId = raffle.id;
+  const cards = await db.bingoCard.findMany({ where: { raffleId }, orderBy: { seq: "asc" } });
+  if (cards.length === 0) {
+    await db.raffle.update({ where: { id: raffleId }, data: { status: "OPEN" } });
+    return null;
+  }
+
+  const drand = raffle.closesAt
+    ? await drandForCloseTime(raffle.closesAt.getTime())
+    : await fetchDrandLatest();
+  if (!drand) {
+    await db.raffle.update({ where: { id: raffleId }, data: { status: "OPEN" } });
+    return null;
+  }
+
+  const cardsRoot = await computeCardsRoot(raffleId);
+  const publicEntropy = `${drand.round}:${drand.randomness}:${cardsRoot}`;
+  const digest = await hmacSha256Hex(raffle.serverSeed!, publicEntropy);
+  const order = ballOrder(digest);
+
+  const { winners, winningBallIndex } = findWinners(
+    cards.map((c) => ({ card: colsToCard(c.cols as unknown as BingoCols), id: c.id, ownerId: c.ownerId, seq: c.seq })),
+    order,
+  );
+
+  // Split the prize's USD value equally on a tie; the odd cents go to the first
+  // winners so the shares always sum to exactly prizeValue.
+  const n = winners.length;
+  const base = Math.floor(raffle.prizeValue / n);
+  const remainder = raffle.prizeValue - base * n;
+  const shares = winners.map((_, i) => base + (i < remainder ? 1 : 0));
+
+  const claimCodes: string[] = [];
+  for (let i = 0; i < n; i++) claimCodes.push(await newBingoClaimCode());
+
+  const startsAt = new Date();
+  // The reveal runs until the winning ball is called.
+  const endsAt = new Date(startsAt.getTime() + (winningBallIndex + 1) * 18 * 1000);
+
+  await db.$transaction(async (tx) => {
+    await tx.raffle.update({
+      where: { id: raffleId },
+      data: {
+        status: "DRAWN",
+        drandRound: BigInt(drand.round),
+        drandValue: drand.randomness,
+        ticketsRoot: cardsRoot,
+        drawDigest: digest,
+        drawnAt: new Date(),
+      },
+    });
+    for (let i = 0; i < n; i++) {
+      await tx.bingoWin.create({
+        data: {
+          raffleId,
+          cardId: winners[i].id,
+          userId: winners[i].ownerId,
+          position: i + 1,
+          shareUsd: shares[i],
+          claimCode: claimCodes[i],
+        },
+      });
+    }
+    await tx.bingoGame.upsert({
+      where: { raffleId },
+      update: { ballOrder: order, intervalSec: 18, startsAt, endsAt },
+      create: { raffleId, ballOrder: order, intervalSec: 18, startsAt, endsAt },
+    });
+  });
+
+  publishDrawStart(raffle.slug);
+
+  return {
+    winners: winners.map((w, i) => ({ position: i + 1, number: w.seq })),
     publicEntropy,
     digest,
     drandRound: drand.round,
