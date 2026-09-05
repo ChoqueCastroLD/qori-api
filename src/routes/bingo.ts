@@ -15,6 +15,17 @@ function requireUser(user: User | null, set: any): user is User {
   return true;
 }
 
+// Players can pick/edit/regenerate their cards until this long before the draw.
+const EDIT_LOCK_MS = 5 * 60 * 1000;
+function editWindowOpen(status: string, closesAt: Date | null): boolean {
+  if (status !== "OPEN") return false;
+  if (closesAt && Date.now() > closesAt.getTime() - EDIT_LOCK_MS) return false;
+  return true;
+}
+function editableUntilOf(closesAt: Date | null): string | null {
+  return closesAt ? new Date(closesAt.getTime() - EDIT_LOCK_MS).toISOString() : null;
+}
+
 /** Generate `count` cards whose 24-number sets are all new (vs `taken` + each
  *  other). Uniqueness is astronomically easy; the cap only guards against bugs. */
 function freshCards(count: number, taken: Set<string>): { cols: BingoCols; key: string }[] {
@@ -271,17 +282,28 @@ export const bingo = new Elysia({ name: "bingo" })
   // --- My cards in a raffle (full positions + win state). ---
   .get("/raffles/:slug/bingo/cards", async ({ user, params, set }) => {
     if (!requireUser(user, set)) return { error: "unauthenticated" };
-    const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true, status: true } });
+    const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true, status: true, closesAt: true } });
     if (!raffle) { set.status = 404; return { error: "not_found" }; }
-    const cards = await db.bingoCard.findMany({
+    const myCards = await db.bingoCard.findMany({
       where: { raffleId: raffle.id, ownerId: user.id },
       orderBy: { seq: "asc" },
       include: { win: { select: { shareUsd: true, position: true, claimCode: true, prizeStatus: true } } },
     });
-    const editable = raffle.status === "OPEN";
+    // Per-number popularity across ALL cards, so the picker can show how many
+    // cartillas already hold each number.
+    const all = await db.bingoCard.findMany({ where: { raffleId: raffle.id }, select: { cols: true } });
+    const cardsPerNumber: Record<number, number> = {};
+    for (let n = 1; n <= 75; n++) cardsPerNumber[n] = 0;
+    for (const c of all) {
+      const cols = c.cols as unknown as BingoCols;
+      for (const arr of [cols.B, cols.I, cols.N, cols.G, cols.O]) for (const n of arr) cardsPerNumber[n]++;
+    }
     return {
-      editable,
-      cards: cards.map((c) => ({ id: c.id, seq: c.seq, ...colsToCard(c.cols as unknown as BingoCols), win: c.win ?? null })),
+      editable: editWindowOpen(raffle.status, raffle.closesAt),
+      editableUntil: editableUntilOf(raffle.closesAt),
+      totalCards: all.length,
+      cardsPerNumber,
+      cards: myCards.map((c) => ({ id: c.id, seq: c.seq, ...colsToCard(c.cols as unknown as BingoCols), win: c.win ?? null })),
     };
   })
 
@@ -291,9 +313,9 @@ export const bingo = new Elysia({ name: "bingo" })
     "/bingo/cards/:id",
     async ({ user, params, body, set }) => {
       if (!requireUser(user, set)) return { error: "unauthenticated" };
-      const card = await db.bingoCard.findUnique({ where: { id: params.id }, include: { raffle: { select: { id: true, status: true } } } });
+      const card = await db.bingoCard.findUnique({ where: { id: params.id }, include: { raffle: { select: { id: true, status: true, closesAt: true } } } });
       if (!card || card.ownerId !== user.id) { set.status = 404; return { error: "not_found" }; }
-      if (card.raffle.status !== "OPEN") { set.status = 422; return { error: "not_editable" }; }
+      if (!editWindowOpen(card.raffle.status, card.raffle.closesAt)) { set.status = 422; return { error: "edit_closed" }; }
       const cols = body.cols as BingoCols;
       if (!validateCols(cols)) { set.status = 422; return { error: "invalid_card" }; }
       const key = colsKey(cols);
@@ -312,9 +334,9 @@ export const bingo = new Elysia({ name: "bingo" })
   // --- Regenerate a card at random (unique). Owner + OPEN only. ---
   .post("/bingo/cards/:id/regenerate", async ({ user, params, set }) => {
     if (!requireUser(user, set)) return { error: "unauthenticated" };
-    const card = await db.bingoCard.findUnique({ where: { id: params.id }, include: { raffle: { select: { status: true } } } });
+    const card = await db.bingoCard.findUnique({ where: { id: params.id }, include: { raffle: { select: { status: true, closesAt: true } } } });
     if (!card || card.ownerId !== user.id) { set.status = 404; return { error: "not_found" }; }
-    if (card.raffle.status !== "OPEN") { set.status = 422; return { error: "not_editable" }; }
+    if (!editWindowOpen(card.raffle.status, card.raffle.closesAt)) { set.status = 422; return { error: "edit_closed" }; }
     const taken = new Set(
       (await db.bingoCard.findMany({ where: { raffleId: card.raffleId }, select: { id: true, key: true } }))
         .filter((c) => c.id !== card.id)
