@@ -342,12 +342,16 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     const raffle = await db.raffle.findUnique({ where: { id: params.id } });
     if (!raffle) { set.status = 404; return { error: "not_found" }; }
     const res = await db.$transaction(async (tx) => {
+      // Bingo tables first (FK RESTRICT from wins -> cards -> raffle).
+      const bw = await tx.bingoWin.deleteMany({ where: { raffleId: params.id } });
+      const bc = await tx.bingoCard.deleteMany({ where: { raffleId: params.id } });
+      await tx.bingoGame.deleteMany({ where: { raffleId: params.id } });
       const w = await tx.winner.deleteMany({ where: { raffleId: params.id } });
       const t = await tx.ticket.deleteMany({ where: { raffleId: params.id } });
       const o = await tx.order.deleteMany({ where: { raffleId: params.id } });
       await tx.notificationLog.deleteMany({ where: { raffleId: params.id } });
       await tx.raffle.delete({ where: { id: params.id } });
-      return { winners: w.count, tickets: t.count, orders: o.count };
+      return { winners: w.count, tickets: t.count, orders: o.count, bingoWins: bw.count, bingoCards: bc.count };
     });
     bustRafflesCache();
     return { ok: true, deleted: { slug: raffle.slug, ...res } };

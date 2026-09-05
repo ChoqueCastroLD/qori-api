@@ -206,7 +206,8 @@ export const bingo = new Elysia({ name: "bingo" })
       }))
       .sort((a, b) => b.marks - a.marks);
 
-    // Me: my full cards (positions) so the HUD can render + mark them.
+    // Me: my full cards (positions) so the HUD can render + mark them. When the
+    // game is over, include MY win (with its private claim code) if I won.
     let me: any = null;
     if (user) {
       const myCards = await db.bingoCard.findMany({
@@ -214,6 +215,9 @@ export const bingo = new Elysia({ name: "bingo" })
         orderBy: { seq: "asc" },
         select: { id: true, seq: true, cols: true },
       });
+      const myWin = statusStr === "finished"
+        ? await db.bingoWin.findFirst({ where: { raffleId: raffle.id, userId: user.id }, select: { shareUsd: true, claimCode: true, prizeStatus: true } })
+        : null;
       me = {
         userId: user.id,
         nickname: user.nickname ?? user.username ?? "Tú",
@@ -221,6 +225,7 @@ export const bingo = new Elysia({ name: "bingo" })
         suertudo: lucky.has(user.id),
         cards: myCards.map((c) => ({ id: c.id, seq: c.seq, ...colsToCard(c.cols as unknown as BingoCols) })),
         activeCardIndex: 0,
+        win: myWin ? { shareUsd: myWin.shareUsd / 100, claimCode: myWin.claimCode, prizeStatus: myWin.prizeStatus } : null,
       };
     }
 
@@ -234,7 +239,7 @@ export const bingo = new Elysia({ name: "bingo" })
       winners = wins.map((w) => ({
         nickname: w.user?.nickname ?? w.user?.username ?? "Ganador",
         avatarUrl: w.user?.avatarUrl ?? null,
-        shareUsd: w.shareUsd,
+        shareUsd: w.shareUsd / 100, // cents -> USD (frontend shows dollars)
         cards: w.userId ? cardCountByUser.get(w.userId) ?? 1 : 1,
       }));
     }
