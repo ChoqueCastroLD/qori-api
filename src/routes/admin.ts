@@ -13,6 +13,11 @@ import { creditTopupIfPending } from "../lib/topups";
 import { applyLedger } from "../lib/wallet";
 import { suertudoSet } from "../lib/suertudo";
 import { getStatusByCommerce as flowStatusByCommerce } from "../lib/flow";
+import { generateCard, cardToCols, cardKey } from "../lib/bingo";
+
+// Synthetic test players share this email prefix so they're easy to clean up.
+const TESTBOT_PREFIX = "bingobot.";
+const testbotEmail = (raffleId: string, i: number) => `${TESTBOT_PREFIX}${raffleId}.${i}@qori.test`;
 
 const ADMIN_TOKEN = process.env.ADMIN_TOKEN ?? "";
 // Affiliates: cash paid per VALID referral (referred user who spent real money).
@@ -229,6 +234,83 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     const refundedOrders = await refundRaffle(raffle.id);
     bustRafflesCache();
     return { ok: true, refundedOrders };
+  })
+
+  // TEST ONLY: fill a bingo with synthetic players + cards (no orders, no
+  // lingotes, no topups -> keeps revenue/order metrics clean). Reversible with
+  // /bingo-testclean. Cards are created directly, unique vs the existing set.
+  .post(
+    "/raffles/:id/bingo-testfill",
+    async ({ params, body, set }) => {
+      const raffle = await db.raffle.findUnique({ where: { id: params.id } });
+      if (!raffle || raffle.kind !== "BINGO") { set.status = 422; return { error: "not_bingo" }; }
+      if (raffle.status !== "OPEN") { set.status = 422; return { error: "not_open" }; }
+
+      const existing = await db.bingoCard.findMany({ where: { raffleId: raffle.id }, select: { key: true, seq: true } });
+      const remaining = raffle.totalTickets - existing.length;
+      const want = body.count != null ? Math.min(body.count, remaining) : remaining;
+      if (want <= 0) return { ok: true, created: 0, players: 0, note: "already_full" };
+      const players = Math.max(1, Math.min(body.players ?? Math.min(6, want), want));
+
+      // One synthetic user per player (idempotent by email).
+      const userIds: string[] = [];
+      for (let i = 0; i < players; i++) {
+        const email = testbotEmail(raffle.id, i);
+        const u = await db.user.upsert({
+          where: { email },
+          update: {},
+          create: {
+            email,
+            emailVerified: new Date(),
+            nickname: `Jugador de prueba ${i + 1}`,
+            country: "PE",
+            referralCode: `BOT${raffle.id.slice(-6).toUpperCase()}${i}`,
+          },
+          select: { id: true },
+        });
+        userIds.push(u.id);
+      }
+
+      // Generate `want` unique cards and spread them round-robin across players.
+      const taken = new Set(existing.map((c) => c.key));
+      let seq = existing.reduce((m, c) => Math.max(m, c.seq), 0);
+      const rows: { raffleId: string; ownerId: string; seq: number; cols: any; key: string }[] = [];
+      for (let i = 0; i < want; i++) {
+        let key = ""; let cols = null as any;
+        for (let a = 0; a < 200; a++) {
+          const card = generateCard(Math.random);
+          const k = cardKey(card);
+          if (!taken.has(k)) { key = k; cols = cardToCols(card); break; }
+        }
+        if (!cols) break;
+        taken.add(key);
+        rows.push({ raffleId: raffle.id, ownerId: userIds[i % players], seq: ++seq, cols, key });
+      }
+      await db.bingoCard.createMany({ data: rows });
+      bustRafflesCache();
+      return { ok: true, created: rows.length, players, totalCards: existing.length + rows.length, cap: raffle.totalTickets };
+    },
+    { body: t.Object({ count: t.Optional(t.Integer({ minimum: 1, maximum: 1000 })), players: t.Optional(t.Integer({ minimum: 1, maximum: 50 })) }) },
+  )
+
+  // TEST ONLY: remove every synthetic player of a bingo and all their cards/wins.
+  .post("/raffles/:id/bingo-testclean", async ({ params, set }) => {
+    const raffle = await db.raffle.findUnique({ where: { id: params.id }, select: { id: true } });
+    if (!raffle) { set.status = 404; return { error: "not_found" }; }
+    const bots = await db.user.findMany({
+      where: { email: { startsWith: `${TESTBOT_PREFIX}${raffle.id}.` } },
+      select: { id: true },
+    });
+    const ids = bots.map((b) => b.id);
+    if (ids.length === 0) return { ok: true, users: 0, cards: 0 };
+    const result = await db.$transaction(async (tx) => {
+      const wins = await tx.bingoWin.deleteMany({ where: { OR: [{ userId: { in: ids } }, { raffleId: raffle.id, card: { ownerId: { in: ids } } }] } });
+      const cards = await tx.bingoCard.deleteMany({ where: { ownerId: { in: ids } } });
+      const users = await tx.user.deleteMany({ where: { id: { in: ids } } });
+      return { wins: wins.count, cards: cards.count, users: users.count };
+    });
+    bustRafflesCache();
+    return { ok: true, ...result };
   })
 
   // Block / unblock a raffle (with reason). Blocked raffles are hidden from the

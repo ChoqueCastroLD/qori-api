@@ -349,12 +349,19 @@ const app = new Elysia({ prefix: "/api" })
   // Public participants: who's in, with their ticket count (no money). Shown on
   // the raffle page for transparency; links to /u/:username.
   .get("/raffles/:slug/participants", async ({ params, set }) => {
-    const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true, status: true, ticketPrice: true } });
+    const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true, status: true, ticketPrice: true, kind: true } });
     if (!raffle) { set.status = 404; return { error: "not_found" }; }
-    const tickets = await db.ticket.findMany({
-      where: { raffleId: raffle.id, ownerId: { not: null } },
-      select: { ownerId: true, owner: { select: { username: true, nickname: true, avatarUrl: true } } },
-    });
+    // Bingo has cards (not tickets); everyone else has tickets. Same shape:
+    // one row per issued entry with its owner, so the tally below is identical.
+    const tickets = raffle.kind === "BINGO"
+      ? await db.bingoCard.findMany({
+          where: { raffleId: raffle.id },
+          select: { ownerId: true, owner: { select: { username: true, nickname: true, avatarUrl: true } } },
+        })
+      : await db.ticket.findMany({
+          where: { raffleId: raffle.id, ownerId: { not: null } },
+          select: { ownerId: true, owner: { select: { username: true, nickname: true, avatarUrl: true } } },
+        });
     const byUser = new Map<string, { userId: string; username: string | null; nickname: string | null; avatarUrl: string | null; tickets: number }>();
     for (const t of tickets) {
       let e = byUser.get(t.ownerId!);
