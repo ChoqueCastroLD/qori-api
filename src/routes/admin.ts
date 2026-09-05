@@ -34,7 +34,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   .get("/raffles", async () => {
     const raffles = await db.raffle.findMany({
       orderBy: { createdAt: "desc" },
-      include: { _count: { select: { tickets: true, orders: true } } },
+      include: { _count: { select: { tickets: true, orders: true, bingoCards: true } } },
     });
     // drandRound is BigInt - not JSON-serializable; expose as string.
     return raffles.map((r) => ({ ...r, drandRound: r.drandRound != null ? r.drandRound.toString() : null }));
@@ -311,6 +311,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         if (body.games !== undefined) data.games = body.games as any;
         if (body.finale !== undefined) data.finale = (body.finale || null) as any;
         if (body.status !== undefined) data.status = body.status as any;
+        if (body.intervalSec !== undefined) data.bingoIntervalSec = Math.min(60, Math.max(6, body.intervalSec));
         if (body.closesAt !== undefined) data.closesAt = body.closesAt ? new Date(body.closesAt) : null;
       }
       const updated = await db.raffle.update({ where: { id: params.id }, data });
@@ -333,6 +334,7 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
         finale: t.Optional(t.String()),
         status: t.Optional(t.String()),
         closesAt: t.Optional(t.String()),
+        intervalSec: t.Optional(t.Integer({ minimum: 6, maximum: 60 })),
       }),
     },
   )
@@ -576,7 +578,8 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     const weekAgo = new Date(now - 7 * 86400000);
     const [
       usersTotal, usersVerified, usersNew7d, rafflesGrouped, soldTickets,
-      paidTopups, confirmedOrders, balanceAgg, drawnPrizes,
+      paidTopups, confirmedOrders, balanceAgg, drawnPrizes, offeredPrizes,
+      showWinners, bingoWinners,
     ] = await Promise.all([
       db.user.count(),
       db.user.count({ where: { emailVerified: { not: null } } }),
@@ -587,6 +590,11 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       db.order.aggregate({ where: { status: "CONFIRMED" }, _sum: { costLingotes: true }, _count: { _all: true } }),
       db.user.aggregate({ _sum: { balance: true } }),
       db.raffle.aggregate({ where: { status: "DRAWN", legacy: false }, _sum: { prizeValue: true }, _count: { _all: true } }),
+      // Prizes "offered": every non-legacy raffle that reached the public (open,
+      // closing, drawing or drawn) — the total value we've put on the table.
+      db.raffle.aggregate({ where: { legacy: false, status: { in: ["OPEN", "CLOSED", "DRAWING", "DRAWN"] } }, _sum: { prizeValue: true }, _count: { _all: true } }),
+      db.winner.count(),
+      db.bingoWin.count(),
     ]);
     const rafflesByStatus: Record<string, number> = {};
     for (const g of rafflesGrouped) rafflesByStatus[g.status] = g._count._all;
@@ -596,15 +604,19 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     const lingotesSpent = confirmedOrders._sum.costLingotes ?? 0;
     const lingotesCirculating = balanceAgg._sum.balance ?? 0;
     const prizeAwardedUsdCents = drawnPrizes._sum.prizeValue ?? 0;
+    const prizeOfferedUsdCents = offeredPrizes._sum.prizeValue ?? 0;
+    const winnersTotal = showWinners + bingoWinners;
 
     return {
       users: { total: usersTotal, verified: usersVerified, new7d: usersNew7d },
-      raffles: { byStatus: rafflesByStatus, drawn: drawnPrizes._count._all },
+      raffles: { byStatus: rafflesByStatus, drawn: drawnPrizes._count._all, offered: offeredPrizes._count._all },
       tickets: { sold: soldTickets },
+      winners: { total: winnersTotal },
       money: {
         revenueUsdCents,
         topups: paidTopups._count._all,
         prizeAwardedUsdCents,
+        prizeOfferedUsdCents,
         grossMarginUsdCents: revenueUsdCents - prizeAwardedUsdCents,
         lingotesSold, lingotesSpent, lingotesCirculating,
         orders: confirmedOrders._count._all,
