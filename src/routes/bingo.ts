@@ -169,10 +169,18 @@ export const bingo = new Elysia({ name: "bingo" })
       select: { ownerId: true, cols: true, owner: { select: { id: true, nickname: true, username: true, avatarUrl: true } } },
     });
     const bestByUser = new Map<string, { owner: any; marks: number; letters: string[] }>();
+    const cardCountByUser = new Map<string, number>();
+    const cardsPerNumber: Record<number, number> = {};
+    for (let n = 1; n <= 75; n++) cardsPerNumber[n] = 0;
+    const lettersDone: Record<string, number> = { B: 0, I: 0, N: 0, G: 0, O: 0 };
     for (const c of cards) {
-      const p = progress(c.cols as unknown as BingoCols, drawn);
+      const colsObj = c.cols as unknown as BingoCols;
+      const p = progress(colsObj, drawn);
       const cur = bestByUser.get(c.ownerId);
       if (!cur || p.marks > cur.marks) bestByUser.set(c.ownerId, { owner: c.owner, marks: p.marks, letters: p.letters });
+      cardCountByUser.set(c.ownerId, (cardCountByUser.get(c.ownerId) ?? 0) + 1);
+      for (const L of p.letters) lettersDone[L]++;
+      for (const arr of [colsObj.B, colsObj.I, colsObj.N, colsObj.G, colsObj.O]) for (const n of arr) cardsPerNumber[n]++;
     }
     const lucky = await suertudoSet([...bestByUser.keys(), user?.id]);
     const participants = [...bestByUser.values()]
@@ -183,6 +191,7 @@ export const bingo = new Elysia({ name: "bingo" })
         suertudo: lucky.has(e.owner.id),
         bestLetters: e.letters,
         marks: e.marks,
+        cards: cardCountByUser.get(e.owner.id) ?? 0,
       }))
       .sort((a, b) => b.marks - a.marks);
 
@@ -205,7 +214,7 @@ export const bingo = new Elysia({ name: "bingo" })
     }
 
     // Winners only once the reveal is over (keeps the ending a surprise).
-    let winners: { nickname: string; avatarUrl: string | null; shareUsd: number }[] | undefined;
+    let winners: { nickname: string; avatarUrl: string | null; shareUsd: number; cards: number }[] | undefined;
     if (statusStr === "finished") {
       const wins = await db.bingoWin.findMany({
         where: { raffleId: raffle.id }, orderBy: { position: "asc" },
@@ -215,6 +224,7 @@ export const bingo = new Elysia({ name: "bingo" })
         nickname: w.user?.nickname ?? w.user?.username ?? "Ganador",
         avatarUrl: w.user?.avatarUrl ?? null,
         shareUsd: w.shareUsd,
+        cards: w.userId ? cardCountByUser.get(w.userId) ?? 1 : 1,
       }));
     }
 
@@ -249,6 +259,10 @@ export const bingo = new Elysia({ name: "bingo" })
         digest: raffle.drawDigest ?? null,
       },
       participants,
+      lettersDone,
+      totalCards: cards.length,
+      cardsPerNumber,
+      viewers: bestByUser.size,
       me,
       winners,
     };
