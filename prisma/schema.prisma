@@ -428,6 +428,7 @@ model BingoCard {
   seq      Int // 1-based within the raffle (issue order / display)
   cols     Json
   key      String // canonical sorted 24-number set key (uniqueness)
+  comment  String? // buyer's public note, revealed if this card wins
   createdAt DateTime @default(now())
 
   win BingoWin?

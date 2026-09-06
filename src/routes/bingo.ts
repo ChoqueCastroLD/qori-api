@@ -109,10 +109,11 @@ export const bingo = new Elysia({ name: "bingo" })
           const agg = await tx.bingoCard.aggregate({ where: { raffleId: raffle.id }, _max: { seq: true } });
           let seq = agg._max.seq ?? 0;
           const cards = freshCards(quantity, taken);
+          const note = body.comment?.trim() ? body.comment.trim().slice(0, 140) : null;
           await tx.bingoCard.createMany({
             data: cards.map((c) => ({
               raffleId: raffle.id, ownerId: user.id, orderId: order.id,
-              seq: ++seq, cols: c.cols as any, key: c.key,
+              seq: ++seq, cols: c.cols as any, key: c.key, comment: note,
             })),
           });
 
@@ -148,7 +149,7 @@ export const bingo = new Elysia({ name: "bingo" })
         return { error: "buy_failed" };
       }
     },
-    { params: t.Object({ slug: t.String() }), body: t.Object({ quantity: t.Integer({ minimum: 1, maximum: 200 }) }) },
+    { params: t.Object({ slug: t.String() }), body: t.Object({ quantity: t.Integer({ minimum: 1, maximum: 200 }), comment: t.Optional(t.String({ maxLength: 140 })) }) },
   )
 
   // --- Live bingo state (public; includes `me` when signed in). Balls reveal
@@ -253,7 +254,7 @@ export const bingo = new Elysia({ name: "bingo" })
       // separate BingoWin with its own share + claim code). Aggregate them so
       // the player sees their full prize and every code they need to claim.
       const myWins = statusStr === "finished"
-        ? await db.bingoWin.findMany({ where: { raffleId: raffle.id, userId: user.id }, orderBy: { position: "asc" }, select: { shareUsd: true, claimCode: true, prizeStatus: true } })
+        ? await db.bingoWin.findMany({ where: { raffleId: raffle.id, userId: user.id }, orderBy: { position: "asc" }, select: { shareUsd: true, claimCode: true, prizeStatus: true, card: { select: { comment: true } } } })
         : [];
       const myWin = myWins.length
         ? {
@@ -262,6 +263,7 @@ export const bingo = new Elysia({ name: "bingo" })
             claimCodes: myWins.map((w) => w.claimCode).filter((c): c is string => !!c),
             prizeStatus: myWins.every((w) => w.prizeStatus === "DELIVERED") ? "DELIVERED" : "PENDING",
             cards: myWins.length,
+            message: myWins.map((w) => w.card?.comment).find((c) => c && c.trim()) ?? null,
           }
         : null;
       me = {
@@ -276,24 +278,26 @@ export const bingo = new Elysia({ name: "bingo" })
     }
 
     // Winners only once the reveal is over (keeps the ending a surprise).
-    let winners: { nickname: string; avatarUrl: string | null; shareUsd: number; cards: number }[] | undefined;
+    let winners: { nickname: string; avatarUrl: string | null; shareUsd: number; cards: number; message: string | null }[] | undefined;
     if (statusStr === "finished") {
       const wins = await db.bingoWin.findMany({
         where: { raffleId: raffle.id }, orderBy: { position: "asc" },
-        include: { user: { select: { nickname: true, username: true, avatarUrl: true } } },
+        include: { user: { select: { nickname: true, username: true, avatarUrl: true } }, card: { select: { comment: true } } },
       });
       // Group by user so a multi-card winner shows once with their combined share
       // (null-user rows — deleted accounts — stay separate, keyed by win id).
-      const grouped = new Map<string, { nickname: string; avatarUrl: string | null; shareCents: number; cards: number }>();
+      const grouped = new Map<string, { nickname: string; avatarUrl: string | null; shareCents: number; cards: number; message: string | null }>();
       for (const w of wins) {
         const key = w.userId ?? `anon:${w.id}`;
+        const note = w.card?.comment?.trim() || null;
         const prev = grouped.get(key);
-        if (prev) prev.shareCents += w.shareUsd;
+        if (prev) { prev.shareCents += w.shareUsd; if (!prev.message && note) prev.message = note; }
         else grouped.set(key, {
           nickname: w.user?.nickname ?? w.user?.username ?? "Ganador",
           avatarUrl: w.user?.avatarUrl ?? null,
           shareCents: w.shareUsd,
           cards: w.userId ? cardCountByUser.get(w.userId) ?? 1 : 1,
+          message: note,
         });
       }
       winners = [...grouped.values()].map((g) => ({
@@ -301,6 +305,7 @@ export const bingo = new Elysia({ name: "bingo" })
         avatarUrl: g.avatarUrl,
         shareUsd: g.shareCents / 100, // cents -> USD (frontend shows dollars)
         cards: g.cards,
+        message: g.message,
       }));
     }
 
