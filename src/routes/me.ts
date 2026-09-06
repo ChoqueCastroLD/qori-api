@@ -187,11 +187,26 @@ export const me = new Elysia({ name: "me" })
   // --- My tickets & orders ---
   .get("/me/tickets", async ({ user, set }) => {
     if (!requireUser(user, set)) return { error: "unauthenticated" };
-    const tickets = await db.ticket.findMany({
-      where: { ownerId: user.id },
-      include: { raffle: { select: { slug: true, title: true, status: true, images: true } }, win: true },
-      orderBy: { createdAt: "desc" },
-    });
+    const [rawTickets, bingoCards] = await Promise.all([
+      db.ticket.findMany({
+        where: { ownerId: user.id },
+        include: { raffle: { select: { slug: true, title: true, status: true, images: true, kind: true } }, win: true },
+        orderBy: { createdAt: "desc" },
+      }),
+      db.bingoCard.findMany({
+        where: { ownerId: user.id },
+        include: { raffle: { select: { slug: true, title: true, status: true, images: true, kind: true } }, win: true },
+        orderBy: { createdAt: "desc" },
+      }),
+    ]);
+    // Bingo cards appear as "tickets" too (number = card seq, kind flags them so
+    // the UI says "tarjeta" instead of "ticket").
+    const bingoAsTickets = bingoCards.map((c) => ({
+      id: c.id, number: c.seq, createdAt: c.createdAt, kind: "BINGO" as const, comment: c.comment,
+      raffle: c.raffle, win: c.win ? { position: c.win.position } : null,
+    }));
+    const tickets = [...rawTickets.map((t) => ({ ...t, kind: t.raffle.kind })), ...bingoAsTickets]
+      .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
     // hasPaid: used to gate "solo compradores" raffles (paidOnly) in the UI.
     const paidTopups = await db.topUp.count({ where: { userId: user.id, status: "PAID" } });
     return { tickets, hasPaid: paidTopups > 0 };
