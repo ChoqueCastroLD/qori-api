@@ -206,6 +206,24 @@ export function promoDuplicaEmail(): { subject: string; html: string } {
   };
 }
 
+/** Launch promo for the free-to-play bingo. `slug` + hero `imageUrl` injected. */
+export function bingoPromoEmail(slug: string, imageUrl: string): { subject: string; html: string } {
+  const url = `${WEB_ORIGIN}/sorteos/${slug}`;
+  return {
+    subject: "Te regalamos medio dólar en lingotes para jugar bingo gratis",
+    html: template({
+      heading: "Estrenamos Bingo: juega gratis",
+      body:
+        `<img src="${imageUrl}" width="456" alt="Bingo en qori" style="width:100%;max-width:456px;border-radius:12px;display:block;margin:0 0 18px" />` +
+        `Acabamos de sumar <strong>5 lingotes</strong> a tu cuenta &mdash; <strong>medio dólar</strong> para que juegues sin pagar nada.` +
+        `<br><br>Ya puedes jugar <strong>Bingo</strong> en qori: cartón lleno, en vivo, con la voz cantando cada bola y resultado verificable. Cada cartilla cuesta <strong>5 lingotes (medio dólar)</strong>, así que con tu regalo entras con una cartilla <strong>totalmente gratis</strong>.` +
+        `<br><br>Las cartillas son <strong>limitadas</strong>, así que aprovecha antes de que se agoten.`,
+      cta: { label: "Jugar bingo gratis", url },
+      footnote: "Tus lingotes ya están en tu saldo. Válido mientras haya cartillas disponibles. Juega con responsabilidad. Solo mayores de 18 años.",
+    }),
+  };
+}
+
 export function winnerEmail(raffleTitle: string, ticketNumber: number, slug: string): { subject: string; html: string } {
   return {
     subject: `¡Ganaste ${raffleTitle}!`,

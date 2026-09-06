@@ -7,10 +7,10 @@ import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from ".
 import { getPayment } from "../lib/mercadopago";
 import { getOrderBreakdown } from "../lib/paypal";
 import { bustRafflesCache } from "../lib/rafflesCache";
-import { sendEmail, prizeClaimEmail, promoDuplicaEmail } from "../lib/email";
+import { sendEmail, prizeClaimEmail, promoDuplicaEmail, bingoPromoEmail } from "../lib/email";
 import { newClaimCode } from "../lib/claim";
 import { creditTopupIfPending } from "../lib/topups";
-import { applyLedger } from "../lib/wallet";
+import { applyLedger, applyLedgerStandalone } from "../lib/wallet";
 import { suertudoSet } from "../lib/suertudo";
 import { getStatusByCommerce as flowStatusByCommerce } from "../lib/flow";
 import { generateCard, cardToCols, cardKey } from "../lib/bingo";
@@ -570,6 +570,57 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     },
     { body: t.Object({ email: t.String() }) },
   )
+  // Gift N lingotes to EVERY user (idempotent per `tag` via the ledger, so
+  // re-running won't double-credit). Only credits with ?confirm=SEND.
+  .post(
+    "/gift-all",
+    async ({ body, query }) => {
+      const users = await db.user.findMany({ select: { id: true } });
+      if (query.confirm !== "SEND") return { dryRun: true, users: users.length, amount: body.lingotes, tag: body.tag };
+      const already = new Set(
+        (await db.ledgerEntry.findMany({ where: { refType: "promo", refId: body.tag }, select: { userId: true } })).map((l) => l.userId),
+      );
+      let credited = 0, skipped = 0;
+      for (const u of users) {
+        if (already.has(u.id)) { skipped++; continue; }
+        try {
+          await applyLedgerStandalone({ userId: u.id, amount: body.lingotes, type: "ADJUSTMENT", refType: "promo", refId: body.tag, memo: body.note ?? "Regalo promocional" });
+          credited++;
+        } catch { skipped++; }
+      }
+      return { ok: true, credited, skipped, total: users.length };
+    },
+    { body: t.Object({ lingotes: t.Integer({ minimum: 1, maximum: 100000 }), tag: t.String({ minLength: 3, maxLength: 60 }), note: t.Optional(t.String()) }) },
+  )
+
+  // Broadcast the bingo launch promo email to ALL users. ?confirm=SEND to send;
+  // anything else returns the recipient count.
+  .post(
+    "/bingo-promo-email/send",
+    async ({ body, query }) => {
+      const users = await db.user.findMany({ select: { email: true } });
+      const emails = [...new Set(users.map((u) => u.email).filter((e): e is string => !!e))];
+      if (query.confirm !== "SEND") return { dryRun: true, count: emails.length };
+      const mail = bingoPromoEmail(body.slug, body.imageUrl);
+      let sent = 0;
+      for (const email of emails) { const ok = await sendEmail({ to: email, ...mail }).catch(() => false); if (ok) sent++; }
+      return { ok: true, sent, total: emails.length };
+    },
+    { body: t.Object({ slug: t.String(), imageUrl: t.String() }) },
+  )
+
+  // Preview the bingo promo email to a single address.
+  .post(
+    "/bingo-promo-email/test",
+    async ({ body, set }) => {
+      const email = (body.email || "").trim();
+      if (!email) { set.status = 422; return { error: "email_required" }; }
+      const ok = await sendEmail({ to: email, ...bingoPromoEmail(body.slug, body.imageUrl) }).catch(() => false);
+      return { ok: !!ok, sentTo: email };
+    },
+    { body: t.Object({ email: t.String(), slug: t.String(), imageUrl: t.String() }) },
+  )
+
   // Send a SAMPLE claim email to any address (to preview the design).
   .post(
     "/winners/test-email",
