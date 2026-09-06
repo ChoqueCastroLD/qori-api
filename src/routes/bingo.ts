@@ -26,6 +26,14 @@ function editableUntilOf(closesAt: Date | null): string | null {
   return closesAt ? new Date(closesAt.getTime() - EDIT_LOCK_MS).toISOString() : null;
 }
 
+// Real viewer tracking: each open room polls the state endpoint, which doubles
+// as a heartbeat. A viewer is "watching now" if seen in the last VIEWER_LIVE_MS;
+// the distinct row count is the historical "X watched this". DB writes are
+// throttled per viewer so the 2.5s poll doesn't hammer the table.
+const VIEWER_LIVE_MS = 20_000;
+const VIEWER_WRITE_THROTTLE_MS = 8_000;
+const viewerLastWrite = new Map<string, number>();
+
 /** Generate `count` cards whose 24-number sets are all new (vs `taken` + each
  *  other). Uniqueness is astronomically easy; the cap only guards against bugs. */
 function freshCards(count: number, taken: Set<string>): { cols: BingoCols; key: string }[] {
@@ -146,11 +154,32 @@ export const bingo = new Elysia({ name: "bingo" })
   // --- Live bingo state (public; includes `me` when signed in). Balls reveal
   // progressively off the synchronized timeline; future balls and winners stay
   // hidden until the reveal reaches them (suspense + no peeking). ---
-  .get("/raffles/:slug/bingo", async ({ user, params, set }) => {
+  .get("/raffles/:slug/bingo", async ({ user, params, set, query }) => {
     const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, include: { bingoGame: true } });
     if (!raffle || raffle.kind !== "BINGO") { set.status = 404; return { error: "not_found" }; }
     const isAdmin = user?.role === "ADMIN";
     if (raffle.status === "DRAFT" && !isAdmin) { set.status = 404; return { error: "not_found" }; }
+
+    // Heartbeat: record this viewer (logged-in user or anonymous tab id), throttled.
+    const vid = typeof query?.vid === "string" ? query.vid.slice(0, 40) : undefined;
+    const viewerKey = user ? `user:${user.id}` : vid ? `anon:${vid}` : null;
+    if (viewerKey) {
+      const wk = `${raffle.id}:${viewerKey}`;
+      const nowMs = Date.now();
+      if (nowMs - (viewerLastWrite.get(wk) ?? 0) > VIEWER_WRITE_THROTTLE_MS) {
+        viewerLastWrite.set(wk, nowMs);
+        if (viewerLastWrite.size > 20000) for (const [k, v] of viewerLastWrite) if (nowMs - v > 60_000) viewerLastWrite.delete(k);
+        await db.bingoViewer.upsert({
+          where: { raffleId_viewerKey: { raffleId: raffle.id, viewerKey } },
+          update: { lastSeen: new Date() },
+          create: { raffleId: raffle.id, viewerKey },
+        }).catch(() => {});
+      }
+    }
+    const [liveViewers, totalViewers] = await Promise.all([
+      db.bingoViewer.count({ where: { raffleId: raffle.id, lastSeen: { gt: new Date(Date.now() - VIEWER_LIVE_MS) } } }),
+      db.bingoViewer.count({ where: { raffleId: raffle.id } }),
+    ]);
 
     // Timeline: how many balls are visible right now.
     const game = raffle.bingoGame;
@@ -309,7 +338,8 @@ export const bingo = new Elysia({ name: "bingo" })
       lettersDone,
       totalCards: cards.length,
       cardsPerNumber,
-      viewers: bestByUser.size,
+      viewers: Math.max(liveViewers, bestByUser.size),
+      viewersTotal: Math.max(totalViewers, bestByUser.size),
       me,
       winners,
     };

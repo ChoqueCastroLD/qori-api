@@ -334,9 +334,10 @@ model Raffle {
   chat     ChatMessage[]
 
   // Bingo relations (only used when kind = BINGO).
-  bingoCards BingoCard[]
-  bingoWins  BingoWin[]
-  bingoGame  BingoGame?
+  bingoCards   BingoCard[]
+  bingoWins    BingoWin[]
+  bingoGame    BingoGame?
+  bingoViewers BingoViewer[]
 
   @@index([status])
 }
@@ -472,6 +473,22 @@ model BingoGame {
   startsAt    DateTime
   endsAt      DateTime?
   createdAt   DateTime  @default(now())
+}
+
+// One row per distinct viewer of a bingo room (logged-in user or anonymous tab).
+// `lastSeen` powers the live "watching now" count; the row count is the historical
+// "X people watched this" once the game ends.
+model BingoViewer {
+  id        String   @id @default(cuid())
+  raffle    Raffle   @relation(fields: [raffleId], references: [id], onDelete: Cascade)
+  raffleId  String
+  viewerKey String // "user:<id>" or "anon:<tabId>"
+  firstSeen DateTime @default(now())
+  lastSeen  DateTime @default(now())
+
+  @@unique([raffleId, viewerKey])
+  @@index([raffleId])
+  @@index([lastSeen])
 }
 
 // Dedupe for lifecycle emails: one row per (raffle, kind) once sent.
