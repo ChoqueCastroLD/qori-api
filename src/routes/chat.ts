@@ -5,6 +5,17 @@ import { suertudoSet, isSuertudo } from "../lib/suertudo";
 
 const CHAT_GRACE_MS = 5 * 60 * 1000; // chat stays open 5 min after the draw
 
+// When the chat becomes read-only. For BINGO this is 5 min after the reveal
+// ENDS (bingoGame.endsAt) — not drawnAt, which is stamped when the draw is
+// computed (i.e. at the START of a multi-minute reveal).
+async function chatClosesAt(raffle: { id: string; kind: string; status: string; drawnAt: Date | null }): Promise<Date | null> {
+  if (raffle.kind === "BINGO") {
+    const game = await db.bingoGame.findUnique({ where: { raffleId: raffle.id }, select: { endsAt: true } });
+    return game?.endsAt ? new Date(game.endsAt.getTime() + CHAT_GRACE_MS) : null;
+  }
+  return raffle.status === "DRAWN" && raffle.drawnAt ? new Date(raffle.drawnAt.getTime() + CHAT_GRACE_MS) : null;
+}
+
 // Light anti-spam: minimum gap between messages per user (in-memory; single
 // backend instance). Old entries are pruned opportunistically.
 const CHAT_COOLDOWN_MS = 2000;
@@ -26,7 +37,7 @@ export const chat = new Elysia({ name: "chat" })
   .get(
     "/raffles/:slug/chat",
     async ({ params, query }) => {
-      const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true, status: true, drawnAt: true } });
+      const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true, status: true, drawnAt: true, kind: true } });
       if (!raffle) return { messages: [], closesAt: null, closed: false };
       const after = query.after ? new Date(query.after) : null;
       const messages = await db.chatMessage.findMany({
@@ -34,8 +45,8 @@ export const chat = new Elysia({ name: "chat" })
         orderBy: { createdAt: "desc" },
         take: 80,
       });
-      // Chat closes 5 min after the raffle is drawn (then it's read-only history).
-      const closesAt = raffle.status === "DRAWN" && raffle.drawnAt ? new Date(raffle.drawnAt.getTime() + CHAT_GRACE_MS) : null;
+      // Chat closes 5 min after the draw/reveal ends (then it's read-only history).
+      const closesAt = await chatClosesAt(raffle);
       const lucky = await suertudoSet(messages.map((m) => m.userId));
       const withSuertudo = messages.reverse().map((m) => ({ ...m, suertudo: lucky.has(m.userId) }));
       return { messages: withSuertudo, closesAt: closesAt ? closesAt.toISOString() : null, closed: !!closesAt && Date.now() > closesAt.getTime() };
@@ -54,12 +65,13 @@ export const chat = new Elysia({ name: "chat" })
         set.status = 403;
         return { error: "chat_disabled" };
       }
-      const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true, status: true, drawnAt: true } });
+      const raffle = await db.raffle.findUnique({ where: { slug: params.slug }, select: { id: true, status: true, drawnAt: true, kind: true } });
       if (!raffle) {
         set.status = 404;
         return { error: "not_found" };
       }
-      if (raffle.status === "DRAWN" && raffle.drawnAt && Date.now() > raffle.drawnAt.getTime() + CHAT_GRACE_MS) {
+      const closesAt = await chatClosesAt(raffle);
+      if (closesAt && Date.now() > closesAt.getTime()) {
         set.status = 403;
         return { error: "chat_closed" };
       }

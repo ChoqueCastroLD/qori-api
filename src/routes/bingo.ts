@@ -162,11 +162,16 @@ export const bingo = new Elysia({ name: "bingo" })
       const order = game.ballOrder;
       const interval = game.intervalSec * 1000;
       const elapsed = Date.now() - game.startsAt.getTime();
-      const revealed = Math.max(0, Math.min(Math.floor(elapsed / interval), order.length));
+      // The draw STOPS at the winning ball (endsAt), not at ball 75 — no balls
+      // should keep dispensing after someone completed their card.
+      const winningCount = game.endsAt
+        ? Math.min(order.length, Math.max(1, Math.round((game.endsAt.getTime() - game.startsAt.getTime()) / interval)))
+        : order.length;
+      const revealed = Math.max(0, Math.min(Math.floor(elapsed / interval), winningCount));
       drawnBalls = order.slice(0, revealed);
       const lastN = revealed > 0 ? order[revealed - 1] : null;
       currentBall = lastN != null ? { letter: letterOf(lastN), number: lastN } : null;
-      nextBallInSec = revealed >= order.length ? 0 : Math.max(0, Math.ceil((interval - (elapsed % interval)) / 1000));
+      nextBallInSec = revealed >= winningCount ? 0 : Math.max(0, Math.ceil((interval - (elapsed % interval)) / 1000));
       const finished = game.endsAt ? Date.now() >= game.endsAt.getTime() : revealed >= order.length;
       statusStr = finished ? "finished" : "drawing";
     } else if (raffle.status === "DRAWN") {
