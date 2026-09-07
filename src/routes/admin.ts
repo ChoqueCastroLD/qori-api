@@ -313,6 +313,24 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     return { ok: true, ...result };
   })
 
+  // Fast-forward a bingo reveal to the end NOW (shift the whole timeline into the
+  // past, preserving the winning-ball index). The winner is already recorded;
+  // this just stops the long ball-by-ball animation and shows the result.
+  .post("/raffles/:id/bingo-finish", async ({ params, set }) => {
+    const game = await db.bingoGame.findUnique({ where: { raffleId: params.id } });
+    if (!game || !game.endsAt) { set.status = 422; return { error: "no_game" }; }
+    const shift = game.endsAt.getTime() - Date.now() + 2000; // push endsAt ~2s into the past
+    if (shift <= 0) return { ok: true, alreadyFinished: true };
+    await db.bingoGame.update({
+      where: { raffleId: params.id },
+      data: {
+        startsAt: new Date(game.startsAt.getTime() - shift),
+        endsAt: new Date(game.endsAt.getTime() - shift),
+      },
+    });
+    return { ok: true, shiftedMs: shift };
+  })
+
   // Block / unblock a raffle (with reason). Blocked raffles are hidden from the
   // public, can't sell tickets, and are skipped by the scheduler. Every toggle
   // is appended to blockHistory for the record.
