@@ -8,6 +8,19 @@ import { createOrder as createPaypalOrder, paypalConfigured } from "../lib/paypa
 import { binanceConfigured, binanceInstructions } from "../lib/binance";
 import { nowpaymentsConfigured, createInvoice as createCryptoInvoice } from "../lib/nowpayments";
 import { flowConfigured, createPayment as createFlowPayment } from "../lib/flow";
+import { getRates } from "../lib/fx";
+
+// Manual Yape: users pay to this number and an admin validates the top-up.
+const YAPE_NUMBER = process.env.YAPE_NUMBER ?? "+51 967 391 839";
+const YAPE_NAME = process.env.YAPE_NAME ?? "";
+async function usdToPen(amountUsd: number): Promise<number> {
+  try {
+    const { rates } = await getRates();
+    const r = rates["PEN"];
+    if (r && r > 0) return Math.round((amountUsd / 100) * r * 100) / 100;
+  } catch {}
+  return Math.round((amountUsd / 100) * 3.75 * 100) / 100;
+}
 import { sendEmail, purchaseEmail } from "../lib/email";
 import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
 import { publishSold } from "../lib/liveRaffles";
@@ -498,12 +511,17 @@ export const me = new Elysia({ name: "me" })
         set.status = 503;
         return { error: "crypto_not_configured", topup };
       }
+      if (body.method === "YAPE") {
+        // Manual: user yapea to our number, uploads proof, an admin validates.
+        const amountPen = await usdToPen(topup.amountUsd);
+        return { topup, yape: { number: YAPE_NUMBER, name: YAPE_NAME, amountPen } };
+      }
       return { topup };
     },
     {
       body: t.Object({
         amountUsd: t.Integer({ minimum: 100 }), // min $1
-        method: t.Union([t.Literal("MERCADOPAGO"), t.Literal("PAYPAL"), t.Literal("CRYPTO"), t.Literal("FLOW")]),
+        method: t.Union([t.Literal("MERCADOPAGO"), t.Literal("PAYPAL"), t.Literal("CRYPTO"), t.Literal("FLOW"), t.Literal("YAPE")]),
       }),
     },
   )
