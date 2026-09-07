@@ -217,6 +217,12 @@ model TopUp {
   providerRef String?
   proofUrl    String?
 
+  // Manual Yape: the PEN amount + FX rate are LOCKED at creation so it can't be
+  // gamed, and `expiresAt` bounds how long the user has to send the proof.
+  amountPen Int? // locked amount to pay in PEN cents (soles * 100)
+  fxRate    Float? // locked USD->PEN rate used
+  expiresAt DateTime?
+
   // Settlement breakdown from the payment processor, in the CHARGE currency's
   // minor units (e.g. PEN cents for MercadoPago, USD cents for PayPal).
   chargeCurrency String? // ISO code actually charged (PEN, USD…)

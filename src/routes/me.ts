@@ -9,19 +9,51 @@ import { binanceConfigured, binanceInstructions } from "../lib/binance";
 import { nowpaymentsConfigured, createInvoice as createCryptoInvoice } from "../lib/nowpayments";
 import { flowConfigured, createPayment as createFlowPayment } from "../lib/flow";
 import { getRates } from "../lib/fx";
+import { makeScopedToken, verifyScopedToken } from "../lib/emailToken";
+import { creditTopupIfPending } from "../lib/topups";
 
-// Manual Yape: users pay to this number and an admin validates the top-up.
+const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "https://qori.cc";
+// Where the manual-Yape review email (with accept/reject links) is sent.
+const REVIEW_EMAIL = process.env.REVIEW_EMAIL ?? "luis.choque.castro@outlook.com";
+// Manual Yape: users pay to this number and the owner validates the top-up.
 const YAPE_NUMBER = process.env.YAPE_NUMBER ?? "+51 967 391 839";
 const YAPE_NAME = process.env.YAPE_NAME ?? "";
-async function usdToPen(amountUsd: number): Promise<number> {
-  try {
-    const { rates } = await getRates();
-    const r = rates["PEN"];
-    if (r && r > 0) return Math.round((amountUsd / 100) * r * 100) / 100;
-  } catch {}
-  return Math.round((amountUsd / 100) * 3.75 * 100) / 100;
+const YAPE_TTL_MS = 30 * 60 * 1000; // 30 min to send the proof
+const REVIEW_TTL_MS = 3 * 24 * 60 * 60 * 1000; // owner can review for 3 days
+
+// Lock the PEN amount + FX rate at creation so it can't be gamed mid-flow.
+async function lockedPen(amountUsd: number): Promise<{ rate: number; amountPen: number }> {
+  let rate = 3.75;
+  try { const { rates } = await getRates(); if (rates["PEN"] && rates["PEN"] > 0) rate = rates["PEN"]; } catch {}
+  return { rate, amountPen: Math.round((amountUsd / 100) * rate * 100) }; // PEN cents
 }
-import { sendEmail, purchaseEmail } from "../lib/email";
+
+async function sendYapeReview(topup: { id: string; amountUsd: number; amountPen: number | null }, proofUrl: string, u: { nickname: string | null; email: string | null }) {
+  const [acceptTok, rejectTok] = await Promise.all([
+    makeScopedToken(topup.id, "topup_review", REVIEW_TTL_MS, "accept"),
+    makeScopedToken(topup.id, "topup_review", REVIEW_TTL_MS, "reject"),
+  ]);
+  const mail = yapeReviewEmail({
+    nickname: u.nickname, email: u.email,
+    amountUsd: topup.amountUsd, amountPen: topup.amountPen ?? 0, proofUrl,
+    acceptUrl: `${WEB_ORIGIN}/api/topups/review?token=${encodeURIComponent(acceptTok)}&action=accept`,
+    rejectUrl: `${WEB_ORIGIN}/api/topups/review?token=${encodeURIComponent(rejectTok)}&action=reject`,
+    adminUrl: `${WEB_ORIGIN}/admin`,
+  });
+  await sendEmail({ to: REVIEW_EMAIL, ...mail }).catch(() => {});
+}
+
+function reviewPage(title: string, body: string, ok = true): string {
+  const color = ok ? "#059669" : "#dc2626";
+  return `<!doctype html><html lang="es"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>${title}</title></head>
+  <body style="margin:0;background:#f8fafc;font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif">
+  <div style="max-width:440px;margin:64px auto;background:#fff;border:1px solid #e2e8f0;border-radius:20px;padding:32px;text-align:center">
+    <div style="font-size:22px;font-weight:800;color:${color}">${title}</div>
+    <p style="color:#475569;font-size:15px;line-height:1.5;margin-top:10px">${body}</p>
+    <a href="${WEB_ORIGIN}/admin" style="display:inline-block;margin-top:18px;background:#0f172a;color:#fff;text-decoration:none;font-weight:600;padding:12px 22px;border-radius:12px">Ir al admin</a>
+  </div></body></html>`;
+}
+import { sendEmail, purchaseEmail, yapeReviewEmail } from "../lib/email";
 import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from "../lib/storage";
 import { publishSold } from "../lib/liveRaffles";
 import { logActivity } from "../lib/activity";
@@ -512,9 +544,11 @@ export const me = new Elysia({ name: "me" })
         return { error: "crypto_not_configured", topup };
       }
       if (body.method === "YAPE") {
-        // Manual: user yapea to our number, uploads proof, an admin validates.
-        const amountPen = await usdToPen(topup.amountUsd);
-        return { topup, yape: { number: YAPE_NUMBER, name: YAPE_NAME, amountPen } };
+        // Manual: locked PEN amount + 30-min window; user uploads a screenshot.
+        const { rate, amountPen } = await lockedPen(topup.amountUsd);
+        const expiresAt = new Date(Date.now() + YAPE_TTL_MS);
+        await db.topUp.update({ where: { id: topup.id }, data: { amountPen, fxRate: rate, expiresAt } });
+        return { topup: { ...topup, amountPen, expiresAt }, yape: { number: YAPE_NUMBER, name: YAPE_NAME, amountPen: amountPen / 100, expiresAt: expiresAt.toISOString(), ttlSec: YAPE_TTL_MS / 1000 } };
       }
       return { topup };
     },
@@ -543,6 +577,55 @@ export const me = new Elysia({ name: "me" })
     },
     { body: t.Object({ proofUrl: t.String({ maxLength: 500 }) }) },
   )
+
+  // Manual Yape: upload the payment SCREENSHOT (image). Locks on the 30-min
+  // window, stores the proof, and emails the owner a review with accept/reject.
+  .post(
+    "/topups/:id/proof-image",
+    async ({ user, params, body, set }) => {
+      if (!requireUser(user, set)) return { error: "unauthenticated" };
+      const topup = await db.topUp.findUnique({ where: { id: params.id }, include: { user: { select: { nickname: true, email: true } } } });
+      if (!topup || topup.userId !== user.id) { set.status = 404; return { error: "not_found" }; }
+      if (topup.status !== "PENDING") { set.status = 422; return { error: "already_processed" }; }
+      if (topup.expiresAt && Date.now() > topup.expiresAt.getTime()) { set.status = 410; return { error: "expired" }; }
+      if (!storageConfigured()) { set.status = 503; return { error: "storage_not_configured" }; }
+      const file = body.file as File;
+      const ext = extForType(file.type);
+      if (!ext || !file.type.startsWith("image/")) { set.status = 415; return { error: "unsupported_type" }; }
+      if (file.size > MAX_UPLOAD_BYTES) { set.status = 413; return { error: "too_large" }; }
+      try {
+        const key = `proofs/${topup.id}.${ext}`;
+        const url = await uploadObject(key, await file.arrayBuffer(), file.type);
+        await db.topUp.update({ where: { id: topup.id }, data: { proofUrl: url } });
+        await sendYapeReview({ id: topup.id, amountUsd: topup.amountUsd, amountPen: topup.amountPen }, url, topup.user);
+        return { ok: true };
+      } catch (e) {
+        set.status = 502;
+        return { error: "upload_failed" };
+      }
+    },
+    { body: t.Object({ file: t.File() }) },
+  )
+
+  // One-click review from the owner's email (secure signed token). Renders an
+  // HTML page. On accept, credits the lingotes; on reject, fails the top-up.
+  .get("/topups/review", async ({ query, set }) => {
+    set.headers["content-type"] = "text/html; charset=utf-8";
+    const action = query.action;
+    if (action !== "accept" && action !== "reject") { set.status = 400; return reviewPage("Enlace inválido", "La acción no es válida.", false); }
+    const topupId = query.token ? await verifyScopedToken(query.token, "topup_review", action) : null;
+    if (!topupId) { set.status = 403; return reviewPage("Enlace inválido o expirado", "Este enlace ya no es válido. Revisa la recarga desde el panel de admin.", false); }
+    const topup = await db.topUp.findUnique({ where: { id: topupId } });
+    if (!topup) { set.status = 404; return reviewPage("No encontrado", "La recarga no existe.", false); }
+    if (topup.status === "PAID") return reviewPage("Ya estaba aprobada", "Esta recarga ya fue acreditada.");
+    if (topup.status === "FAILED") return reviewPage("Ya estaba rechazada", "Esta recarga ya había sido rechazada.", false);
+    if (action === "accept") {
+      await creditTopupIfPending(topup.id, { memoLabel: "Recarga Yape" });
+      return reviewPage("Recarga aprobada", `Se acreditaron ${topup.lingotes} lingotes al usuario. Se le envió el correo de aprobación.`);
+    }
+    await db.topUp.update({ where: { id: topup.id }, data: { status: "FAILED" } });
+    return reviewPage("Recarga rechazada", "La recarga quedó marcada como rechazada. No se acreditaron lingotes.", false);
+  })
 
   .get("/topups/mine", async ({ user, set }) => {
     if (!requireUser(user, set)) return { error: "unauthenticated" };

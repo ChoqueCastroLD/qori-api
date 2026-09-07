@@ -206,6 +206,37 @@ export function promoDuplicaEmail(): { subject: string; html: string } {
   };
 }
 
+/** Owner review of a manual Yape top-up: screenshot + amounts + accept/reject. */
+export function yapeReviewEmail(o: {
+  nickname: string | null; email: string | null; amountUsd: number; amountPen: number;
+  proofUrl: string; acceptUrl: string; rejectUrl: string; adminUrl: string;
+}): { subject: string; html: string } {
+  const usd = (o.amountUsd / 100).toFixed(2);
+  const pen = (o.amountPen / 100).toFixed(2);
+  const row = (k: string, v: string) => `<tr><td style="padding:4px 0;color:#94a3b8;font-size:13px">${k}</td><td style="padding:4px 0;text-align:right;font-weight:700;color:#0f172a;font-size:14px">${v}</td></tr>`;
+  return {
+    subject: `Recarga Yape por validar: S/ ${pen} · ${o.nickname ?? "usuario"}`,
+    html: template({
+      heading: "Recarga Yape por validar",
+      body:
+        `Un usuario dice haber pagado por Yape. Revisa la captura, verifica que <strong>el monto coincide</strong> y que la transferencia realmente llegó a tu Yape, y luego apruébala o recházala.` +
+        `<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="margin:16px 0;border:1px solid #e2e8f0;border-radius:12px;padding:12px">` +
+        row("Usuario", o.nickname ?? "sin nombre") +
+        row("Correo", o.email ?? "-") +
+        row("Debía pagar", `S/ ${pen}`) +
+        row("Equivale a", `$ ${usd}`) +
+        `</table>` +
+        `<a href="${o.proofUrl}" style="text-decoration:none"><img src="${o.proofUrl}" alt="Captura del pago" style="width:100%;max-width:456px;border-radius:12px;border:1px solid #e2e8f0;display:block" /></a>` +
+        `<p style="margin:10px 0 0;font-size:12px;color:#94a3b8">Si no ves la imagen, activa "mostrar imágenes" o <a href="${o.proofUrl}" style="color:#059669">ábrela aquí</a>.</p>` +
+        `<table role="presentation" cellpadding="0" cellspacing="0" style="margin-top:18px"><tr>` +
+        `<td style="padding-right:8px"><a href="${o.acceptUrl}" style="display:inline-block;background:#059669;color:#fff;text-decoration:none;font-weight:700;font-size:15px;padding:12px 26px;border-radius:12px">Aprobar y acreditar</a></td>` +
+        `<td><a href="${o.rejectUrl}" style="display:inline-block;background:#fee2e2;color:#b91c1c;text-decoration:none;font-weight:700;font-size:15px;padding:12px 26px;border-radius:12px">Rechazar</a></td>` +
+        `</tr></table>`,
+      footnote: `También puedes revisarlo en el <a href="${o.adminUrl}" style="color:#059669;font-weight:600">panel de admin</a>. Aprobar acredita los lingotes al instante.`,
+    }),
+  };
+}
+
 /** Launch promo for the free-to-play bingo. `slug` + hero `imageUrl` injected. */
 export function bingoPromoEmail(slug: string, imageUrl: string): { subject: string; html: string } {
   const url = `${WEB_ORIGIN}/sorteos/${slug}`;
