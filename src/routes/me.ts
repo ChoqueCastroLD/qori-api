@@ -17,7 +17,7 @@ const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "https://qori.cc";
 const REVIEW_EMAIL = process.env.REVIEW_EMAIL ?? "luis.choque.castro@outlook.com";
 // Manual Yape: users pay to this number and the owner validates the top-up.
 const YAPE_NUMBER = process.env.YAPE_NUMBER ?? "+51 967 391 839";
-const YAPE_NAME = process.env.YAPE_NAME ?? "";
+const YAPE_NAME = process.env.YAPE_NAME ?? "Luis Choque";
 const YAPE_TTL_MS = 30 * 60 * 1000; // 30 min to send the proof
 const REVIEW_TTL_MS = 3 * 24 * 60 * 60 * 1000; // owner can review for 3 days
 
