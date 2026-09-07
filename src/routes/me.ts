@@ -22,10 +22,12 @@ const YAPE_TTL_MS = 30 * 60 * 1000; // 30 min to send the proof
 const REVIEW_TTL_MS = 3 * 24 * 60 * 60 * 1000; // owner can review for 3 days
 
 // Lock the PEN amount + FX rate at creation so it can't be gamed mid-flow.
+const YAPE_FALLBACK_RATE = Number(process.env.YAPE_USD_RATE ?? 4); // 1 USD = 4 PEN fallback
 async function lockedPen(amountUsd: number): Promise<{ rate: number; amountPen: number }> {
-  let rate = 3.75;
+  let rate = YAPE_FALLBACK_RATE;
   try { const { rates } = await getRates(); if (rates["PEN"] && rates["PEN"] > 0) rate = rates["PEN"]; } catch {}
-  return { rate, amountPen: Math.round((amountUsd / 100) * rate * 100) }; // PEN cents
+  const amountPen = Math.round((amountUsd / 100) * rate * 100); // USD cents -> PEN cents
+  return { rate, amountPen };
 }
 
 async function sendYapeReview(topup: { id: string; amountUsd: number; amountPen: number | null }, proofUrl: string, u: { nickname: string | null; email: string | null }) {
