@@ -463,20 +463,38 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
 
   // --- Prize winners: list, mark delivered, and notify (backfill) ---
   .get("/winners", async () => {
-    const winners = await db.winner.findMany({
-      include: {
-        raffle: { select: { slug: true, title: true, prizeValue: true, drawnAt: true, legacy: true } },
-        ticket: { select: { number: true } },
-        user: { select: { nickname: true, email: true, username: true } },
-      },
-      orderBy: [{ createdAt: "desc" }],
-    });
-    return winners.map((w) => ({
-      id: w.id, position: w.position, prizeStatus: w.prizeStatus, claimCode: w.claimCode,
-      notifiedAt: w.notifiedAt, deliveredAt: w.deliveredAt, ticketNumber: w.ticket?.number ?? null,
+    const [winners, bingoWins] = await Promise.all([
+      db.winner.findMany({
+        include: {
+          raffle: { select: { slug: true, title: true, prizeValue: true, drawnAt: true, legacy: true } },
+          ticket: { select: { number: true } },
+          user: { select: { nickname: true, email: true, username: true } },
+        },
+        orderBy: [{ createdAt: "desc" }],
+      }),
+      db.bingoWin.findMany({
+        include: {
+          raffle: { select: { slug: true, title: true, prizeValue: true, drawnAt: true, legacy: true } },
+          user: { select: { nickname: true, email: true, username: true } },
+        },
+        orderBy: [{ createdAt: "desc" }],
+      }),
+    ]);
+    const showRows = winners.map((w) => ({
+      id: w.id, kind: "SHOW" as const, position: w.position, prizeStatus: w.prizeStatus, claimCode: w.claimCode,
+      notifiedAt: w.notifiedAt, deliveredAt: w.deliveredAt, ticketNumber: w.ticket?.number ?? null, shareUsd: null as number | null,
       name: w.name ?? w.user?.nickname ?? null, email: w.user?.email ?? null, username: w.user?.username ?? null,
       raffle: { slug: w.raffle.slug, title: w.raffle.title, prizeValue: w.raffle.prizeValue, drawnAt: w.raffle.drawnAt, legacy: w.raffle.legacy },
+      createdAt: w.createdAt,
     }));
+    const bingoRows = bingoWins.map((w) => ({
+      id: w.id, kind: "BINGO" as const, position: w.position, prizeStatus: w.prizeStatus, claimCode: w.claimCode,
+      notifiedAt: w.notifiedAt, deliveredAt: w.deliveredAt, ticketNumber: null as number | null, shareUsd: w.shareUsd, // cents this winner gets
+      name: w.user?.nickname ?? null, email: w.user?.email ?? null, username: w.user?.username ?? null,
+      raffle: { slug: w.raffle.slug, title: w.raffle.title, prizeValue: w.shareUsd, drawnAt: w.raffle.drawnAt, legacy: w.raffle.legacy },
+      createdAt: w.createdAt,
+    }));
+    return [...showRows, ...bingoRows].sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   })
   .patch(
     "/winners/:id",
@@ -485,6 +503,19 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
       if (!w) { set.status = 404; return { error: "not_found" }; }
       const status = body.prizeStatus === "DELIVERED" ? "DELIVERED" : "PENDING";
       await db.winner.update({ where: { id: params.id }, data: { prizeStatus: status, deliveredAt: status === "DELIVERED" ? (w.deliveredAt ?? new Date()) : null } });
+      return { ok: true, prizeStatus: status };
+    },
+    { body: t.Object({ prizeStatus: t.String() }) },
+  )
+  // Mark a BINGO winner's prize delivered / pending (bingo prizes are paid out
+  // manually in USD, so this just tracks the delivery state).
+  .patch(
+    "/bingo-wins/:id",
+    async ({ params, body, set }) => {
+      const w = await db.bingoWin.findUnique({ where: { id: params.id } });
+      if (!w) { set.status = 404; return { error: "not_found" }; }
+      const status = body.prizeStatus === "DELIVERED" ? "DELIVERED" : "PENDING";
+      await db.bingoWin.update({ where: { id: params.id }, data: { prizeStatus: status, deliveredAt: status === "DELIVERED" ? (w.deliveredAt ?? new Date()) : null } });
       return { ok: true, prizeStatus: status };
     },
     { body: t.Object({ prizeStatus: t.String() }) },
