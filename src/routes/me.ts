@@ -469,6 +469,11 @@ export const me = new Elysia({ name: "me" })
         set.status = 422;
         return { error: "invalid_package" };
       }
+      // Manual Yape is only worth validating for $5+ (too much overhead for $1).
+      if (body.method === "YAPE" && body.amountUsd < 500) {
+        set.status = 422;
+        return { error: "yape_min" };
+      }
       const lingotes = pkg.total;
       const topup = await db.topUp.create({
         data: {
