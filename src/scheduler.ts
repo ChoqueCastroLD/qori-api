@@ -6,7 +6,7 @@ import { creditTopupIfPending } from "./lib/topups";
 import { notifyOnce, participants, sendToAll, sendResults, sendPostponed } from "./lib/notify";
 import { closingSoonEmail, startingSoonEmail } from "./lib/email";
 
-const MAX_EXTENSIONS = 5; // after this many +24h extensions, cancel + refund
+const MAX_EXTENSIONS = 0; // 0 = never postpone: if under the minimum at close, cancel + refund immediately
 const EXTEND_MS = 24 * 60 * 60 * 1000;
 
 // Catch payments that completed at the provider but never got credited (e.g. the
