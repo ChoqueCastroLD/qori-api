@@ -469,10 +469,11 @@ export const me = new Elysia({ name: "me" })
         set.status = 422;
         return { error: "invalid_package" };
       }
-      // Manual Yape is only worth validating for $5+ (too much overhead for $1).
-      if (body.method === "YAPE" && body.amountUsd < 500) {
+      // Retired methods: MercadoPago, Yape and Flow are no longer offered. New
+      // top-ups are blocked here; existing payments still settle via webhooks.
+      if (body.method === "MERCADOPAGO" || body.method === "YAPE" || body.method === "FLOW") {
         set.status = 422;
-        return { error: "yape_min" };
+        return { error: "method_unavailable" };
       }
       const lingotes = pkg.total;
       const topup = await db.topUp.create({
