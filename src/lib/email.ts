@@ -237,6 +237,26 @@ export function yapeReviewEmail(o: {
   };
 }
 
+/** Raffle cancelled (min not reached): refund confirmation + upcoming raffles. */
+export function raffleCancelledEmail(raffleTitle: string, freeBingoUrl: string): { subject: string; html: string } {
+  return {
+    subject: `${raffleTitle} cancelado: te devolvimos tus lingotes`,
+    html: template({
+      heading: "Te devolvimos tus lingotes",
+      body:
+        `El sorteo <strong>${raffleTitle}</strong> no alcanzó el mínimo de tickets para poder realizarse, así que lo cancelamos y <strong>reembolsamos íntegros todos tus lingotes</strong> a tu saldo. No perdiste nada.` +
+        `<br><br>Puedes usarlos ahora mismo en estos sorteos:` +
+        `<ul style="padding-left:18px;margin:10px 0">` +
+        `<li style="margin:8px 0"><a href="${freeBingoUrl}" style="color:#059669;font-weight:700;text-decoration:none">Bingo GRATIS de $8</a> — juega hoy mismo, en unas horas.</li>` +
+        `<li style="margin:8px 0"><a href="${WEB_ORIGIN}/sorteos" style="color:#059669;font-weight:700;text-decoration:none">Sorteo de $10</a> — este viernes a la 1:00 p. m.</li>` +
+        `</ul>` +
+        `Entra con tus lingotes reembolsados y sigue participando. ¡Gracias por ser parte de qori!`,
+      cta: { label: "Jugar el bingo gratis", url: freeBingoUrl },
+      footnote: "Tus lingotes ya están de vuelta en tu saldo. Puedes usarlos cuando quieras.",
+    }),
+  };
+}
+
 /** Launch promo for the free-to-play bingo. `slug` + hero `imageUrl` injected. */
 export function bingoPromoEmail(slug: string, imageUrl: string): { subject: string; html: string } {
   const url = `${WEB_ORIGIN}/sorteos/${slug}`;

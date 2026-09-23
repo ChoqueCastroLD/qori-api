@@ -7,7 +7,7 @@ import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from ".
 import { getPayment } from "../lib/mercadopago";
 import { getOrderBreakdown } from "../lib/paypal";
 import { bustRafflesCache } from "../lib/rafflesCache";
-import { sendEmail, prizeClaimEmail, promoDuplicaEmail, bingoPromoEmail } from "../lib/email";
+import { sendEmail, prizeClaimEmail, promoDuplicaEmail, bingoPromoEmail, raffleCancelledEmail } from "../lib/email";
 import { newClaimCode } from "../lib/claim";
 import { creditTopupIfPending } from "../lib/topups";
 import { applyLedger, applyLedgerStandalone } from "../lib/wallet";
@@ -234,6 +234,25 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     const refundedOrders = await refundRaffle(raffle.id);
     bustRafflesCache();
     return { ok: true, refundedOrders };
+  })
+
+  // Email every buyer of a cancelled raffle: refund confirmation + upcoming
+  // raffles. `?confirm=SEND` actually sends; otherwise returns the recipient count.
+  .post("/raffles/:id/notify-cancelled", async ({ params, query }) => {
+    const raffle = await db.raffle.findUnique({ where: { id: params.id }, select: { title: true } });
+    if (!raffle) return { error: "not_found" };
+    const rows = await db.ticket.findMany({
+      where: { raffleId: params.id, ownerId: { not: null } },
+      distinct: ["ownerId"],
+      select: { owner: { select: { email: true } } },
+    });
+    const emails = [...new Set(rows.map((r) => r.owner?.email).filter((e): e is string => !!e))];
+    if (query.confirm !== "SEND") return { dryRun: true, count: emails.length };
+    const WEB = process.env.WEB_ORIGIN ?? "https://qori.cc";
+    const mail = raffleCancelledEmail(raffle.title, `${WEB}/sorteos/bingo-gratis-8-usd`);
+    let sent = 0;
+    for (const email of emails) { const ok = await sendEmail({ to: email, ...mail }).catch(() => false); if (ok) sent++; }
+    return { ok: true, sent, total: emails.length };
   })
 
   // TEST ONLY: fill a bingo with synthetic players + cards (no orders, no
