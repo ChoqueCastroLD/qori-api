@@ -237,6 +237,39 @@ export function yapeReviewEmail(o: {
   };
 }
 
+/** Promo for an upcoming raffle/bingo, built from the raffle's own data. */
+export function raffleEventPromoEmail(r: {
+  slug: string; title: string; kind: string; ticketPrice: number; totalTickets: number;
+  prizeValue: number; closesAt: Date | null; image: string | null; paidOnly: boolean;
+}): { subject: string; html: string } {
+  const url = `${WEB_ORIGIN}/sorteos/${r.slug}`;
+  const bingo = r.kind === "BINGO";
+  const unit = bingo ? "tarjeta" : "ticket";
+  const when = r.closesAt
+    ? new Intl.DateTimeFormat("es-PE", { timeZone: "America/Lima", weekday: "long", day: "numeric", month: "long", hour: "numeric", minute: "2-digit", hour12: true }).format(r.closesAt)
+    : null;
+  const prize = `$${(r.prizeValue / 100).toFixed(0)} USD`;
+  const priceUsd = (r.ticketPrice / 10).toFixed(r.ticketPrice % 10 === 0 ? 0 : 2);
+  return {
+    subject: `${bingo ? "Bingo en vivo" : "Sorteo"} por ${prize}${when ? ` · ${when}` : ""}`,
+    html: template({
+      heading: bingo ? `Bingo en vivo por ${prize}` : `Sorteo por ${prize}`,
+      body:
+        (r.image ? `<img src="${r.image}" width="456" alt="${r.title}" style="width:100%;max-width:456px;border-radius:12px;display:block;margin:0 0 18px" />` : "") +
+        `Juega <strong>${r.title}</strong>${when ? ` el <strong>${when}</strong> (hora Perú)` : ""}.` +
+        `<br><br>Cada ${unit} cuesta <strong>${r.ticketPrice} lingotes ($${priceUsd})</strong> y solo hay <strong>${r.totalTickets} ${unit}s</strong>.` +
+        (bingo
+          ? ` Elige tus números, entra a la sala en vivo y escucha cómo se canta cada bola: gana quien complete primero su cartón. El resultado es público y verificable.`
+          : ` El sorteo se hace en vivo y el resultado es público y verificable.`) +
+        (r.paidOnly
+          ? `<br><br><strong>Exclusivo para Suertudos:</strong> participan quienes han recargado lingotes con dinero real. ¿Aún no lo eres? Recarga desde $1 con PayPal o cripto y entra.`
+          : ""),
+      cta: { label: bingo ? "Comprar mis tarjetas" : "Comprar mis tickets", url },
+      footnote: `Cupos limitados: cuando se acaban las ${unit}s, se acaban.`,
+    }),
+  };
+}
+
 /** Raffle cancelled (min not reached): refund confirmation + upcoming raffles. */
 export function raffleCancelledEmail(raffleTitle: string, freeBingoUrl: string): { subject: string; html: string } {
   return {

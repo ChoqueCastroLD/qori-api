@@ -7,7 +7,7 @@ import { uploadObject, extForType, storageConfigured, MAX_UPLOAD_BYTES } from ".
 import { getPayment } from "../lib/mercadopago";
 import { getOrderBreakdown } from "../lib/paypal";
 import { bustRafflesCache } from "../lib/rafflesCache";
-import { sendEmail, prizeClaimEmail, promoDuplicaEmail, bingoPromoEmail, raffleCancelledEmail } from "../lib/email";
+import { sendEmail, prizeClaimEmail, promoDuplicaEmail, bingoPromoEmail, raffleCancelledEmail, raffleEventPromoEmail } from "../lib/email";
 import { newClaimCode } from "../lib/claim";
 import { creditTopupIfPending } from "../lib/topups";
 import { applyLedger, applyLedgerStandalone } from "../lib/wallet";
@@ -234,6 +234,27 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
     const refundedOrders = await refundRaffle(raffle.id);
     bustRafflesCache();
     return { ok: true, refundedOrders };
+  })
+
+  // Promo email for an upcoming raffle to ALL users (content from the raffle).
+  // ?test=<email> sends one preview; ?confirm=SEND blasts; else dry-run count.
+  .post("/raffles/:id/promo-email", async ({ params, query, set }) => {
+    const r = await db.raffle.findUnique({ where: { id: params.id } });
+    if (!r) { set.status = 404; return { error: "not_found" }; }
+    const mail = raffleEventPromoEmail({
+      slug: r.slug, title: r.title, kind: r.kind, ticketPrice: r.ticketPrice, totalTickets: r.totalTickets,
+      prizeValue: r.prizeValue, closesAt: r.closesAt, image: r.images?.[0] ?? null, paidOnly: r.paidOnly,
+    });
+    if (query.test) {
+      const ok = await sendEmail({ to: String(query.test), ...mail }).catch(() => false);
+      return { ok: !!ok, test: true, subject: mail.subject };
+    }
+    const users = await db.user.findMany({ select: { email: true } });
+    const emails = [...new Set(users.map((u) => u.email).filter((e): e is string => !!e))];
+    if (query.confirm !== "SEND") return { dryRun: true, count: emails.length, subject: mail.subject };
+    let sent = 0;
+    for (const email of emails) { const ok = await sendEmail({ to: email, ...mail }).catch(() => false); if (ok) sent++; }
+    return { ok: true, sent, total: emails.length };
   })
 
   // Email every buyer of a cancelled raffle: refund confirmation + upcoming
