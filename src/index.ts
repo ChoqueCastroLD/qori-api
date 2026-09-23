@@ -22,6 +22,19 @@ const PORT = Number(process.env.PORT ?? 3000);
 const WEB_ORIGIN = process.env.WEB_ORIGIN ?? "http://localhost:4321";
 
 /**
+ * A bingo's winner is computed the instant it's DRAWN, but the ball-by-ball
+ * reveal plays out over minutes. Until the reveal reaches the winning ball
+ * (game.endsAt), the result must stay hidden publicly (no spoilers) and the
+ * raffle should read as "live", not "finished".
+ */
+function bingoRevealEnded(r: any): boolean {
+  if (r.kind !== "BINGO" || r.status !== "DRAWN") return true;
+  const g = r.bingoGame;
+  if (!g || !g.endsAt) return true;
+  return Date.now() >= new Date(g.endsAt).getTime();
+}
+
+/**
  * Public winners for a BINGO raffle: grouped by user so a multi-card winner
  * shows once with their combined USD share and how many cards they won with.
  * ticketNumber is null (bingo has no ticket numbers).
@@ -70,11 +83,12 @@ function publicRaffle(r: any) {
     paidOnly: r.paidOnly ?? false,
     games: r.games,
     finale: r.finale,
-    status: r.status,
+    // A drawn bingo still mid-reveal reads as "live" publicly (no spoilers).
+    status: r.kind === "BINGO" && r.status === "DRAWN" && !bingoRevealEnded(r) ? "DRAWING" : r.status,
     legacy: r.legacy,
     opensAt: r.opensAt,
     closesAt: r.closesAt,
-    drawnAt: r.drawnAt,
+    drawnAt: r.kind === "BINGO" && !bingoRevealEnded(r) ? null : r.drawnAt,
     extensionCount: r.extensionCount,
     extensions: r.extensions ?? [],
     blocked: r.blocked ?? false,
@@ -277,11 +291,12 @@ const app = new Elysia({ prefix: "/api" })
         _count: { select: { tickets: true, bingoCards: true } },
         winners: { include: { ticket: true, user: true }, orderBy: { position: "asc" } },
         bingoWins: { include: { user: true }, orderBy: { position: "asc" } },
+        bingoGame: { select: { endsAt: true } },
       },
     });
     const data = raffles.map((r) => ({
       ...publicRaffle(r),
-      winners: r.kind === "BINGO" ? bingoWinnersPublic(r.bingoWins) : r.winners.map((w) => ({
+      winners: r.kind === "BINGO" ? (bingoRevealEnded(r) ? bingoWinnersPublic(r.bingoWins) : []) : r.winners.map((w) => ({
         position: w.position,
         ticketNumber: w.ticket.number,
         nickname: w.user?.nickname ?? w.name ?? null,
@@ -300,6 +315,7 @@ const app = new Elysia({ prefix: "/api" })
         _count: { select: { tickets: true, bingoCards: true } },
         winners: { include: { ticket: true, user: true }, orderBy: { position: "asc" } },
         bingoWins: { include: { user: true }, orderBy: { position: "asc" } },
+        bingoGame: { select: { endsAt: true } },
         show: true,
       },
     });
@@ -330,11 +346,11 @@ const app = new Elysia({ prefix: "/api" })
       ...publicRaffle(raffle),
       show,
       winners: raffle.kind === "BINGO"
-        ? bingoWinnersPublic(raffle.bingoWins).map((w) => ({
+        ? (bingoRevealEnded(raffle) ? bingoWinnersPublic(raffle.bingoWins).map((w) => ({
             ...w,
             username: raffle.bingoWins.find((bw) => bw.position === w.position)?.user?.username ?? null,
             suertudo: false,
-          }))
+          })) : [])
         : raffle.winners.map((w) => ({
             position: w.position,
             ticketNumber: w.ticket.number,
