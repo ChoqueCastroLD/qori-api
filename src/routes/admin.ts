@@ -334,6 +334,46 @@ export const admin = new Elysia({ name: "admin", prefix: "/admin" })
   )
 
   // TEST ONLY: remove every synthetic player of a bingo and all their cards/wins.
+  // Grant N free bingo cards to a real user (no order, no lingotes spent).
+  .post(
+    "/raffles/:id/bingo-grant",
+    async ({ params, body, set }) => {
+      const raffle = await db.raffle.findUnique({ where: { id: params.id } });
+      if (!raffle || raffle.kind !== "BINGO") { set.status = 422; return { error: "not_bingo" }; }
+      if (raffle.status !== "OPEN") { set.status = 422; return { error: "not_open" }; }
+      const u = body.email
+        ? await db.user.findUnique({ where: { email: body.email.toLowerCase() }, select: { id: true } })
+        : body.username
+          ? await db.user.findUnique({ where: { username: body.username.toLowerCase() }, select: { id: true } })
+          : null;
+      if (!u) { set.status = 404; return { error: "user_not_found" }; }
+      const created = await db.$transaction(async (tx) => {
+        const existing = await tx.bingoCard.findMany({ where: { raffleId: raffle.id }, select: { key: true, seq: true } });
+        if (existing.length + body.count > raffle.totalTickets) throw new Error("sold_out");
+        const taken = new Set(existing.map((c) => c.key));
+        let seq = existing.reduce((m, c) => Math.max(m, c.seq), 0);
+        const rows: { raffleId: string; ownerId: string; seq: number; cols: any; key: string }[] = [];
+        for (let i = 0; i < body.count; i++) {
+          let key = ""; let cols: any = null;
+          for (let a = 0; a < 200; a++) {
+            const card = generateCard(Math.random);
+            const k = cardKey(card);
+            if (!taken.has(k)) { key = k; cols = cardToCols(card); break; }
+          }
+          if (!cols) throw new Error("could_not_assign");
+          taken.add(key);
+          rows.push({ raffleId: raffle.id, ownerId: u.id, seq: ++seq, cols, key });
+        }
+        await tx.bingoCard.createMany({ data: rows });
+        return rows.length;
+      }).catch((e) => { set.status = 422; return e.message as string; });
+      if (typeof created === "string") return { error: created };
+      bustRafflesCache();
+      return { ok: true, granted: created };
+    },
+    { body: t.Object({ email: t.Optional(t.String()), username: t.Optional(t.String()), count: t.Integer({ minimum: 1, maximum: 100 }) }) },
+  )
+
   .post("/raffles/:id/bingo-testclean", async ({ params, set }) => {
     const raffle = await db.raffle.findUnique({ where: { id: params.id }, select: { id: true } });
     if (!raffle) { set.status = 404; return { error: "not_found" }; }
